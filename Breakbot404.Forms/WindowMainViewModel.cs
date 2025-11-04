@@ -32,7 +32,7 @@ namespace Breakbot404.Forms
 
 		// Properties
         private DateTime LastGarbageCollected = DateTime.MinValue;
-		private float DefaultHueIncrement = 1.125f; // Standardwert
+		private float DefaultHueIncrement = 1.125f;
 		private float StoredHueValue = 0.0f;
 
 
