@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Breakbot404.Core/Breakbot404.Core.csproj" />
+  <Project Path="Breakbot404.Forms/Breakbot404.Forms.csproj" />
+</Solution>
