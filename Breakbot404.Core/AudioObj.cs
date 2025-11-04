@@ -1044,7 +1044,7 @@ namespace Breakbot404.Core
 
 		// Waveform Bitmap Methods
 		[SupportedOSPlatform("windows")]
-		public async Task<Bitmap> DrawWaveformAsync(int width, int height, int samplesPerPixel = 128, bool drawEachChannel = false, int caretWidth = 1, long? offset = null, Color? waveColor = null, Color? backColor = null, Color? caretColor = null, bool smoothen = false, int maxWorkers = 2)
+		public async Task<Bitmap> DrawWaveformAsync(int width, int height, int samplesPerPixel = 128, bool drawEachChannel = false, int caretWidth = 1, long? offset = null, Color? waveColor = null, Color? backColor = null, Color? caretColor = null, bool smoothen = false, double timingMarkersInterval = 0, int maxWorkers = 2)
 		{
 			maxWorkers = Math.Clamp(maxWorkers, 1, Environment.ProcessorCount);
 			waveColor ??= Color.Black;
@@ -1211,7 +1211,56 @@ namespace Breakbot404.Core
 				}).ConfigureAwait(false);
 			}
 
+			if (timingMarkersInterval > 0)
+			{
+				Color inverseGraphColor = Color.FromArgb(255 - waveColor.Value.R, 255 - waveColor.Value.G, 255 - waveColor.Value.B);
+				bitmap = await this.DrawTimingMarkersAsync(bitmap, samplesPerPixel, timingMarkersInterval, inverseGraphColor);
+			}
+
 			return bitmap;
+		}
+
+		[SupportedOSPlatform("windows")]
+		public async Task<Bitmap> DrawTimingMarkersAsync(Bitmap waveForm, int samplesPerPixel, double interval = 1, Color? color = null, bool drawTimes = false)
+		{
+			color ??= Color.Gray;
+
+			// Draw timing markers on existing bitmap considering current position & samplesPerPixel
+			return await Task.Run(() =>
+			{
+				int width = waveForm.Width;
+				int height = waveForm.Height;
+				using (var g = Graphics.FromImage(waveForm))
+				using (var pen = new Pen(color.Value))
+				using (var font = new Font("Arial", 10))
+				using (var brush = new SolidBrush(color.Value))
+				{
+					double invSPP = 1.0 / samplesPerPixel;
+					double intervalInPixels = interval * this.SampleRate * invSPP;
+					if (intervalInPixels <= 0)
+					{
+						return waveForm;
+					}
+					// Erste Markierung berechnen
+					double firstMarkerX = -((this.Position * invSPP) % intervalInPixels);
+					for (double x = firstMarkerX; x < width; x += intervalInPixels)
+					{
+						if (x >= 0 && x < width)
+						{
+							g.DrawLine(pen, (float) x, 0, (float) x, height);
+							
+							if (drawTimes)
+							{
+								double seconds = (this.Position + (x * samplesPerPixel)) / this.SampleRate;
+								TimeSpan time = TimeSpan.FromSeconds(seconds);
+								string timeLabel = time.ToString(@"mm\:ss");
+								g.DrawString(timeLabel, font, brush, (float) x + 2, 2);
+							}
+						}
+					}
+				}
+				return waveForm;
+			}).ConfigureAwait(false);
 		}
 
 		// Info Methods

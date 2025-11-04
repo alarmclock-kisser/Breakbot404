@@ -66,6 +66,9 @@ namespace Breakbot404.Forms
         public bool HueEffect { get; set; } = false;
         public bool StrobeEffect { get; set; } = false;
 		public bool SeekEnabled { get; set; } = true;
+        public bool ConfirmOperations { get; set; } = true;
+        public double TimingMarkerInterval { get; set; } = 5.0;
+        public bool ShowTimingMarkers { get; set; } = false;
 
 
 		// Ctor
@@ -87,7 +90,7 @@ namespace Breakbot404.Forms
 
 
         // Internal Methods (for Form (WindowMain))
-        internal void Bind_ListBox_Log(ListBox listBox, CheckBox? checkBox_autoScroll = null, bool doubleClickToCopy = true, int maxLogEntries = 512)
+        internal void Bind_ListBox_Log(ListBox listBox, CheckBox? checkBox_autoScroll = null, CheckBox? checkBox_confirmOperations = null, bool doubleClickToCopy = true, int maxLogEntries = 512)
         {
             LogCollection.MaxLogCount = maxLogEntries;
 
@@ -130,9 +133,19 @@ namespace Breakbot404.Forms
                     }
                 };
             }
-        }
 
-        internal void Bind_Elements_View(ListBox listBox_audios, PictureBox? pictureBox_waveform = null, NumericUpDown? numeric_frameRate = null, NumericUpDown? numeric_samplesPerPixel = null, HScrollBar? hScrollBar_offset = null, Button? button_waveColor = null, Button? button_backColor = null, CheckBox? checkBox_drawEachChannel = null, CheckBox? checkBox_smoothWaveform = null, CheckBox? checkBox_seek = null, TextBox? textBox_info = null)
+			// Optionally bind the confirm operations CheckBox
+            if (checkBox_confirmOperations != null)
+            {
+                this.ConfirmOperations = checkBox_confirmOperations.Checked;
+                checkBox_confirmOperations.CheckedChanged += (s, e) =>
+                {
+                    this.ConfirmOperations = checkBox_confirmOperations.Checked;
+                };
+			}
+		}
+
+		internal void Bind_Elements_View(ListBox listBox_audios, PictureBox? pictureBox_waveform = null, NumericUpDown? numeric_frameRate = null, NumericUpDown? numeric_samplesPerPixel = null, HScrollBar? hScrollBar_offset = null, Button? button_waveColor = null, Button? button_backColor = null, Button? button_caretColor = null, NumericUpDown? numeric_caretWidth = null, CheckBox? checkBox_drawEachChannel = null, CheckBox? checkBox_smoothWaveform = null, NumericUpDown? numeric_timeMarkers = null, CheckBox? checkBox_timeMarkers = null, CheckBox? checkBox_seek = null, TextBox? textBox_info = null)
         {
             this.HScrollBar_offset = hScrollBar_offset;
             this.PictureBox_waveform = pictureBox_waveform;
@@ -281,7 +294,20 @@ namespace Breakbot404.Forms
                     }
 					else if (this.SelectionMode.Equals("Erase", StringComparison.OrdinalIgnoreCase))
 					{
-                        await this.SelectedTrack.EraseSelectionAsync();
+						if (this.ConfirmOperations)
+						{
+							string msg = $"Are you sure you want to erase in the selected track '{this.SelectedTrack.Name}'? \n\nParameters:\n";
+							msg += $"- Start Time: {this.SelectedTrack.SelectionStart / (double)(this.SelectedTrack.SampleRate * this.SelectedTrack.Channels):F3} s\n";
+                            msg += $"- End Time: {this.SelectedTrack.SelectionEnd / (double)(this.SelectedTrack.SampleRate * this.SelectedTrack.Channels):F3} s\n";
+
+							var confirmResult = MessageBox.Show(this.WindowMain, msg, "Confirm Erase in Track", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+							if (confirmResult != DialogResult.Yes)
+							{
+								return;
+							}
+						}
+
+						await this.SelectedTrack.EraseSelectionAsync();
 						this.SelectedTrack.SelectionStart = -1;
 						this.SelectedTrack.SelectionEnd = -1;
 					}
@@ -399,6 +425,30 @@ namespace Breakbot404.Forms
 				};
             }
 
+            if (button_caretColor != null)
+            {
+				this.CaretColor = button_caretColor.BackColor;
+				button_caretColor.Click += (s, e) =>
+				{
+					using ColorDialog colorDialog = new();
+					if (colorDialog.ShowDialog() == DialogResult.OK)
+					{
+						this.CaretColor = colorDialog.Color;
+						button_caretColor.BackColor = this.CaretColor;
+						button_caretColor.ForeColor = this.CaretColor.GetBrightness() < 0.6f ? Color.White : Color.Black;
+					}
+				};
+			}
+
+            if (numeric_caretWidth != null)
+            {
+                this.CaretWidth = (int) numeric_caretWidth.Value;
+                numeric_caretWidth.ValueChanged += (s, e) =>
+                {
+                    this.CaretWidth = (int) Math.Clamp(numeric_caretWidth.Value, numeric_caretWidth.Minimum, numeric_caretWidth.Maximum);
+                };
+			}
+
             if (checkBox_drawEachChannel != null)
             {
                 this.DrawEachChannel = checkBox_drawEachChannel.Checked;
@@ -407,6 +457,24 @@ namespace Breakbot404.Forms
                     this.DrawEachChannel = checkBox_drawEachChannel.Checked;
                 };
             }
+
+            if (numeric_timeMarkers != null)
+            {
+                this.TimingMarkerInterval = (double) numeric_timeMarkers.Value;
+                numeric_timeMarkers.ValueChanged += (s, e) =>
+                {
+                    this.TimingMarkerInterval = (double) Math.Clamp(numeric_timeMarkers.Value, numeric_timeMarkers.Minimum, numeric_timeMarkers.Maximum);
+                };
+			}
+
+            if (checkBox_timeMarkers != null)
+            {
+                this.ShowTimingMarkers = checkBox_timeMarkers.Checked;
+                checkBox_timeMarkers.CheckedChanged += (s, e) =>
+                {
+                    this.ShowTimingMarkers = checkBox_timeMarkers.Checked;
+                };
+			}
 
             if (checkBox_smoothWaveform != null)
             {
@@ -722,27 +790,33 @@ namespace Breakbot404.Forms
                     {
                         InitialDirectory = this.AudioC.ImportDirectory,
                         Filter = "Audio File|*.wav;*.mp3;*.flac",
-                        Multiselect = false,
-                        Title = "Import a Loop Audio File",
+                        Multiselect = true,
+                        Title = "Import Audio Files / Loops",
                         RestoreDirectory = true
                     };
                     if (openFileDialog.ShowDialog() == DialogResult.OK)
                     {
-                        var importedAudio = await this.AudioC.LoadAsync(openFileDialog.FileName);
-                        if (importedAudio == null)
+                        var tasks = openFileDialog.FileNames.Select(async filePath =>
                         {
-                            MessageBox.Show(this.WindowMain, "Failed to import the selected audio file.", "Import Audio", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                            return;
-                        }
+                            var audioTrack = await this.AudioC.LoadAsync(filePath);
+                            if (audioTrack != null)
+                            {
+                                LogCollection.Log($"{audioTrack.Name} imported.");
+                            }
+                            else
+                            {
+                                LogCollection.Log($"Failed to import file: {filePath}");
+                            }
+                        });
 
-                        if (this.ListBox_audios != null)
-                        {
-                            this.ListBox_audios.SelectedIndex = -1;
-                            this.ListBox_audios.SelectedItem = importedAudio;
-                        }
+                        await Task.WhenAll(tasks);
 
-                        LogCollection.Log($"{importedAudio?.Name} imported.");
-                    }
+						if (this.ListBox_audios != null)
+						{
+							this.ListBox_audios.SelectedIndex = -1;
+							this.ListBox_audios.SelectedIndex = this.ListBox_audios.Items.Count - 1;
+						}
+					}
                 };
             }
 
@@ -756,6 +830,19 @@ namespace Breakbot404.Forms
                         MessageBox.Show(this.WindowMain, "No track selected to reload.", "Reload Track", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         return;
                     }
+
+					if (this.ConfirmOperations)
+					{
+						string msg = $"Are you sure you want to reload the selected track '{this.SelectedTrack.Name}'? \n\nParameters:\n";
+						msg += $"- File Path: {this.SelectedTrack.FilePath}\n";
+
+						var confirmResult = MessageBox.Show(this.WindowMain, msg, "Confirm Reload Track", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+						if (confirmResult != DialogResult.Yes)
+						{
+							return;
+						}
+					}
+
 					if (this.SelectedTrack.LoadAudioFile())
                     {
                         MessageBox.Show(this.WindowMain, "Failed to reload the selected track.", "Reload Track", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -764,9 +851,9 @@ namespace Breakbot404.Forms
                     if (this.ListBox_audios != null)
                     {
                         this.ListBox_audios.SelectedIndex = -1;
-                        this.ListBox_audios.SelectedItem = SelectedTrack;
+                        this.ListBox_audios.SelectedItem = this.SelectedTrack;
                     }
-                    LogCollection.Log($"{SelectedTrack?.Name} reloaded.");
+                    LogCollection.Log($"{this.SelectedTrack?.Name} reloaded.");
                 };
 			}
 
@@ -807,7 +894,19 @@ namespace Breakbot404.Forms
                         return;
                     }
 
-                    string name = this.SelectedTrack.Name;
+					if (this.ConfirmOperations)
+					{
+						string msg = $"Are you sure you want to remove the selected track '{this.SelectedTrack.Name}'? \n\nParameters:\n";
+						msg += $"- Name: {this.SelectedTrack.Name}\n";
+
+						var confirmResult = MessageBox.Show(this.WindowMain, msg, "Confirm Remove Track", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+						if (confirmResult != DialogResult.Yes)
+						{
+							return;
+						}
+					}
+
+					string name = this.SelectedTrack.Name;
 
                     await this.AudioC.RemoveAsync(this.SelectedTrack.Id, true);
                     LogCollection.Log($"{name} removed from collection.");
@@ -1177,6 +1276,21 @@ namespace Breakbot404.Forms
                         return;
                     }
 
+                    if (this.ConfirmOperations)
+                    {
+                        string msg = $"Are you sure you want to auto-cut the selected track '{this.SelectedTrack.Name}'? \n\nParameters:\n";
+                        msg += $"- Target LUFS: {this.AudioC.TargetLufs}\n";
+                        msg += $"- Min Duration: {this.AudioC.MinDurationMs} ms\n";
+                        msg += $"- Max Duration: {this.AudioC.MaxDurationMs} ms\n";
+                        msg += $"- Silence Window: {this.AudioC.SilenceWindowMs} ms\n\n";
+
+						var confirmResult = MessageBox.Show(this.WindowMain, msg, "Confirm Cut Track", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+                        if (confirmResult != DialogResult.Yes)
+                        {
+                            return;
+						}
+					}
+
                     button_cut.Enabled = false;
                     try
                     {
@@ -1231,7 +1345,21 @@ namespace Breakbot404.Forms
                         MessageBox.Show(this.WindowMain, "No track selected to truncate.", "Truncate Track", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         return;
                     }
-                    button_truncate.Enabled = false;
+
+					if (this.ConfirmOperations)
+					{
+						string msg = $"Are you sure you want to truncate the selected track '{this.SelectedTrack.Name}'? \n\nParameters:\n";
+						msg += $"- Start Time: {this.AudioC.TruncateStartSeconds} seconds\n";
+                        msg += $"- End Time: {this.AudioC.TruncateEndSeconds} seconds\n\n";
+
+						var confirmResult = MessageBox.Show(this.WindowMain, msg, "Confirm Truncate Track", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+						if (confirmResult != DialogResult.Yes)
+						{
+							return;
+						}
+					}
+
+					button_truncate.Enabled = false;
                     try
                     {
                         var truncateResult = await this.AudioC.TruncateAudioAsync(this.SelectedTrack.Id);
@@ -1443,7 +1571,8 @@ namespace Breakbot404.Forms
                                     this.GetNextHue(),
                                     this.BackColor,
                                     this.CaretColor,
-                                    this.SmoothenWaveform
+                                    this.SmoothenWaveform,
+                                    this.ShowTimingMarkers ? this.TimingMarkerInterval : 0
                                 ).ConfigureAwait(false);
 
                                 // Scroll HScrollBar to follow playback if playing
@@ -1695,33 +1824,50 @@ namespace Breakbot404.Forms
             return Color.FromArgb(color.A, 255 - color.R, 255 - color.G, 255 - color.B);
 		}
 
-        private double GetTimeUnderCursor()
-        {
-            if (this.PictureBox_waveform == null || this.SelectedTrack == null)
+		private long GetFrameUnderCursor()
+		{
+			if (this.PictureBox_waveform == null || this.SelectedTrack == null)
+			{
+				return 0L;
+			}
+
+			Point cursorPosition = this.PictureBox_waveform.PointToClient(Cursor.Position);
+			int cursorX = Math.Max(0, Math.Min(this.PictureBox_waveform.Width - 1, cursorPosition.X));
+
+			long frameIndex = (long) cursorX * this.SamplesPerPixel;
+
+			if (this.HScrollBar_offset != null)
+			{
+				frameIndex += (long) this.HScrollBar_offset.Value * this.SamplesPerPixel;
+			}
+
+			// Clamp auf vorhandene Frames
+			int ch = Math.Max(1, this.SelectedTrack.Channels);
+			long totalFrames = this.SelectedTrack.Length / ch;
+			if (frameIndex < 0)
+            {
+                frameIndex = 0;
+            }
+
+            if (frameIndex >= totalFrames)
+            {
+                frameIndex = Math.Max(0, totalFrames - 1);
+            }
+
+            return frameIndex;
+		}
+
+		private double GetTimeUnderCursor()
+		{
+			// Zeit aus Frames ableiten (konsistent und ohne Rundungsfehler)
+			if (this.SelectedTrack == null)
             {
                 return 0.0;
             }
-            
-            Point cursorPosition = this.PictureBox_waveform.PointToClient(Cursor.Position);
-            int cursorX = cursorPosition.X;
-            
-            // Clamp cursorX to PictureBox width
-            cursorX = Math.Max(0, Math.Min(this.PictureBox_waveform.Width - 1, cursorX));
-            
-            // Berechne den Frame-Index unter dem Cursor
-            long frameIndex = (long) cursorX * this.SamplesPerPixel;
-            
-            // Berücksichtige den HScrollBar-Offset
-            if (this.HScrollBar_offset != null)
-            {
-                frameIndex += (long) this.HScrollBar_offset.Value * this.SamplesPerPixel;
-            }
-            
-            // Konvertiere Frame-Index in Zeit (in Sekunden)
-            double timeInSeconds = frameIndex / (double) this.SelectedTrack.SampleRate;
 
-			return timeInSeconds;
-        }
+            long frameIndex = this.GetFrameUnderCursor();
+			return frameIndex / (double) this.SelectedTrack.SampleRate;
+		}
 
 
 	}

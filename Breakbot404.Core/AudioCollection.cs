@@ -303,11 +303,15 @@ namespace Breakbot404.Core
             return samples;
         }
 
+		// Draw Methods
+        
 
 
-        // Private Methods
+
+
+		// Private Methods
 
 
 
-    }
+	}
 }
