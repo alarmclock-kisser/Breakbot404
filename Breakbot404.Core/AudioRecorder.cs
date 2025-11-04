@@ -75,7 +75,7 @@ public class AudioRecorder
         }
 
         this.exporter = new AudioExporter(this.RecordsPath);
-        this.WavRecordBits = exporter.AvailableExportFormats[".wav"].Contains(wavRecordBits) ? wavRecordBits : 24;
+        this.WavRecordBits = this.exporter.AvailableExportFormats[".wav"].Contains(wavRecordBits) ? wavRecordBits : 24;
     }
 
 
@@ -325,7 +325,7 @@ public class AudioRecorder
                 if (obj?.Data.LongLength > 0)
                 {
                     await obj.NormalizeAsync();
-                    await exporter.ExportWavAsync(obj, 32);
+                    await this.exporter.ExportWavAsync(obj, 32);
                 }
                 Console.WriteLine("Normalisierung abgeschlossen.");
             }

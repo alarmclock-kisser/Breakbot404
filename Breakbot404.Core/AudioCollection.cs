@@ -23,12 +23,21 @@ namespace Breakbot404.Core
         public int BeatScanMinimumBpm { get; set; } = 70;
         public int BeatScanMaximumBpm { get; set; } = 210;
 
+        public float TargetLufs { get; set; } = -14.0f;
+        public int MinDurationMs { get; set; } = 50;
+        public int MaxDurationMs { get; set; } = 650;
+        public int SilenceWindowMs { get; set; } = 180;
+        public double TruncateStartSeconds { get; set; } = 0.0;
+        public double TruncateEndSeconds { get; set; } = 0.0;
+        public bool KeepOriginal { get; set; } = false;
 
 
-		// Objects
-		public readonly AudioExporter Exporter;
+
+        // Objects
+        public readonly AudioExporter Exporter;
         public readonly AudioRecorder Recorder;
         public readonly BeatScanner Scanner;
+        public readonly SampleCutter Cutter;
 
 
         // Lambda
@@ -64,6 +73,7 @@ namespace Breakbot404.Core
             this.Exporter = new AudioExporter(this.ExportPath);
             this.Recorder = new AudioRecorder(this.RecordPath, wavRecordingBits);
             this.Scanner = new BeatScanner();
+            this.Cutter = new SampleCutter();
         }
 
 
@@ -88,7 +98,7 @@ namespace Breakbot404.Core
             {
                 if (audio != null)
                 {
-                this.Audios.Add(audio);
+                    this.Audios.Add(audio);
                 }
             }
 
@@ -248,6 +258,50 @@ namespace Breakbot404.Core
             return recordedSeconds;
         }
 
+
+        // Truncate Method
+        public async Task<AudioObj?> TruncateAudioAsync(Guid id, TimeSpan? start = null, TimeSpan? end = null, bool? createNew = null)
+        {
+            var audio = this[id];
+            if (audio == null)
+            {
+                return null;
+            }
+
+            var cutAudio = await this.Cutter.TruncateAudioAsync(audio, start?.TotalSeconds ?? this.TruncateEndSeconds, end?.TotalSeconds ?? this.TruncateStartSeconds, createNew ?? this.KeepOriginal);
+            if (cutAudio != null && (createNew ?? this.KeepOriginal))
+            {
+                this.Audios.Add(cutAudio);
+            }
+
+            return cutAudio;
+        }
+
+        // AutoCutting Methods
+        public async Task<IEnumerable<AudioObj?>> AutoCutAudioAsync(Guid id, float? targetLufs = null, int? minDurationMs = null, int? maxDurationMs = null, int? silenceWindowMs = null, int maxWorkers = 4, bool add = false, IProgress<double>? progress = null)
+        {
+            targetLufs ??= this.TargetLufs;
+            minDurationMs ??= this.MinDurationMs;
+            maxDurationMs ??= this.MaxDurationMs;
+            silenceWindowMs ??= this.SilenceWindowMs;
+
+            var audio = this[id];
+            List<AudioObj> samples = [];
+            if (audio != null)
+            {
+                samples = (await this.Cutter.AutoCutSamplesAsync(audio, targetLufs.Value, minDurationMs.Value, maxDurationMs.Value, silenceWindowMs.Value, maxWorkers, progress)).ToList() ?? [];
+            }
+
+            if (add)
+            {
+                foreach (var sample in samples)
+                {
+                    this.Audios.Add(sample);
+                }
+            }
+
+            return samples;
+        }
 
 
 

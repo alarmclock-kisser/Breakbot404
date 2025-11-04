@@ -11,125 +11,123 @@ using System.Threading.Tasks;
 
 namespace Breakbot404.Core
 {
-    public class AudioObj : IDisposable
-    {
-        // Fields
-        public Guid Id { get; set; } = Guid.NewGuid();
-        public readonly DateTime CreatedAt = DateTime.UtcNow;
-        public string Name { get; set; } = string.Empty;
-        public string FilePath { get; set; } = string.Empty;
+	public class AudioObj : IDisposable
+	{
+		// Fields
+		public Guid Id { get; set; } = Guid.NewGuid();
+		public readonly DateTime CreatedAt = DateTime.UtcNow;
+		public string Name { get; set; } = string.Empty;
+		public string FilePath { get; set; } = string.Empty;
 
-        public float[] Data { get; set; } = [];
-        public int SampleRate { get; set; } = 0;
-        public int Channels { get; set; } = 0;
-        public int BitDepth { get; set; } = 0;
-        public long Length { get; set; } = 0;
-        public TimeSpan Duration { get; set; } = TimeSpan.Zero;
+		public float[] Data { get; set; } = [];
+		public int SampleRate { get; set; } = 0;
+		public double SampleRateFactor { get; private set; } = 1.0;
+		public int AdjustedSampleRate => (int) (this.SampleRate * this.SampleRateFactor);
+		public int Channels { get; set; } = 0;
+		public int BitDepth { get; set; } = 0;
+		public long Length { get; set; } = 0;
+		public TimeSpan Duration { get; set; } = TimeSpan.Zero;
 
-        public float Bpm { get; set; } = 0.0f;
-        public float ScannedBpm { get; set; } = 0.0f;
-        public float Timing { get; set; } = 1.0f;
-        public float ScannedTiming { get; set; } = 1.0f;
-        public float Volume { get; set; } = 1.0f;
+		public float Bpm { get; set; } = 0.0f;
+		public float ScannedBpm { get; set; } = 0.0f;
+		public float Timing { get; set; } = 1.0f;
+		public float ScannedTiming { get; set; } = 1.0f;
+		public float Volume { get; set; } = 1.0f;
 
-        public bool Playing { get; private set; } = false;
-        public bool Paused { get; private set; } = false;
+		public bool Playing { get; private set; } = false;
+		public bool Paused { get; private set; } = false;
 
-        public int ChunkSize { get; set; } = 0;
-        public int OverlapSize { get; set; } = 0;
-        public double StretchFactor { get; set; } = 1.0;
+		public int ChunkSize { get; set; } = 0;
+		public int OverlapSize { get; set; } = 0;
+		public double StretchFactor { get; set; } = 1.0;
 
-        public long SkippedPositionBytes { get; private set; } = 0;
+		public long SkippedPositionBytes { get; private set; } = 0;
 
+		public long SelectionStart { get; set; } = 0;
+		public long SelectionEnd { get; set; } = 0;
+
+		// Playback service (neu)
+		private readonly AudioPlaybackService playback = new();
 
 		// Properties
 		private long positionOriginBytes = 0;
 
-
-
 		// Enums
 		public Dictionary<string, double> Metrics { get; private set; } = [];
-        public double this[string metric]
-        {
-            get
-            {
-                // Find by tolower case
-                if (this.Metrics.TryGetValue(metric, out double value))
-                {
-                    return value;
-                }
-                else
-                {
-                    var key = this.Metrics.Keys.FirstOrDefault(k => k.Equals(metric, StringComparison.OrdinalIgnoreCase));
-                    if (key != null)
-                    {
-                        return this.Metrics[key];
-                    }
-                    else
-                    {
-                        // If not found, return 0.0
-                        return 0.0;
-                    }
-                }
-            }
-            set
-            {
-                // Find by tolower case
-                if (this.Metrics.ContainsKey(metric))
-                {
-                    this.Metrics[metric] = value;
-                }
-                else
-                {
-                    var key = this.Metrics.Keys.FirstOrDefault(k => k.Equals(metric, StringComparison.OrdinalIgnoreCase));
-                    if (key != null)
-                    {
-                        this.Metrics[key] = value;
-                    }
-                    else
-                    {
-                        // Capitalize first letter and add to dictionary
-                        string capitalizedMetric = char.ToUpper(metric[0]) + metric.Substring(1).ToLowerInvariant();
-                        this.Metrics.Add(capitalizedMetric, value);
-                    }
-                }
-            }
-        }
+		public double this[string metric]
+		{
+			get
+			{
+				// Find by tolower case
+				if (this.Metrics.TryGetValue(metric, out double value))
+				{
+					return value;
+				}
+				else
+				{
+					var key = this.Metrics.Keys.FirstOrDefault(k => k.Equals(metric, StringComparison.OrdinalIgnoreCase));
+					if (key != null)
+					{
+						return this.Metrics[key];
+					}
+					else
+					{
+						// If not found, return 0.0
+						return 0.0;
+					}
+				}
+			}
+			set
+			{
+				// Find by tolower case
+				if (this.Metrics.ContainsKey(metric))
+				{
+					this.Metrics[metric] = value;
+				}
+				else
+				{
+					var key = this.Metrics.Keys.FirstOrDefault(k => k.Equals(metric, StringComparison.OrdinalIgnoreCase));
+					if (key != null)
+					{
+						this.Metrics[key] = value;
+					}
+					else
+					{
+						// Capitalize first letter and add to dictionary
+						string capitalizedMetric = char.ToUpper(metric[0]) + metric.Substring(1).ToLowerInvariant();
+						this.Metrics.Add(capitalizedMetric, value);
+					}
+				}
+			}
+		}
 
+		// Lambda
+		public bool PlayerPlaying => this.Playing && !this.Paused;
 
-        // Objects
-        private readonly WaveOutEvent player = new();
-        internal WaveStream? WaveStream { get; private set; } = null;
-        private readonly object playbackLock = new();
-
-
-        // Lambda
-        public bool PlayerPlaying => this.player.PlaybackState == PlaybackState.Playing;
 		// Konsistente aktuelle Byte-Position (absolut)
 		public long CurrentPlaybackPositionBytes
 		{
 			get
 			{
-				if (this.player.PlaybackState == PlaybackState.Playing)
+				if (this.PlayerPlaying)
 				{
-					long gp = this.player.GetPosition();
+					long gp = 0;
+					try { gp = this.playback.GetPositionBytes(); } catch { gp = 0; }
 					long delta = gp - this.positionOriginBytes;
-					if (delta < 0) delta = 0;
+					if (delta < 0) { delta = 0; }
 					return this.SkippedPositionBytes + delta;
 				}
 				return this.SkippedPositionBytes;
 			}
 			private set
 			{
-				long target = value;
-				if (this.WaveStream != null)
-				{
-					target = Math.Clamp(target, 0, this.WaveStream.Length);
-					if (this.WaveStream.CanSeek)
-					{
-						this.WaveStream.Position = target;
-					}
-				}
+				// Clamp auf Datenlänge, ohne auf einen WaveStream angewiesen zu sein
+				int ch = Math.Max(1, this.Channels);
+				int bytesPerFrame = ch * sizeof(float);
+				long totalFrames = (this.Data?.LongLength ?? 0L) / ch;
+				long totalBytes = totalFrames * bytesPerFrame;
+
+				long target = Math.Clamp(value, 0, totalBytes);
 				this.SkippedPositionBytes = target;
 			}
 		}
@@ -140,125 +138,170 @@ namespace Breakbot404.Core
 			get
 			{
 				long positionBytes = this.CurrentPlaybackPositionBytes;
-				int bytesPerFrame = this.WaveStream?.WaveFormat.BlockAlign ?? Math.Max(1, this.Channels) * sizeof(float);
+				int bytesPerFrame = Math.Max(1, this.Channels) * sizeof(float);
 				return bytesPerFrame > 0 ? positionBytes / bytesPerFrame : 0;
 			}
 		}
-		public TimeSpan CurrentTime => this.WaveStream != null ? TimeSpan.FromSeconds((double) this.Position / this.SampleRate) : TimeSpan.Zero;
-        public double SizeInKb => this.Data.Length * sizeof(float) / 1024.0;
+		public TimeSpan CurrentTime => TimeSpan.FromSeconds((double) this.Position / Math.Max(1, this.SampleRate));
+		public double SizeInKb => this.Data.Length * sizeof(float) / 1024.0;
 
-
-        // Ctor
-        public AudioObj()
-        {
-            // Empty
-        }
-
-        public AudioObj(string filePath, bool load = false)
-        {
-            this.FilePath = filePath;
-
-            if (load)
-            {
-                if (this.LoadAudioFile())
-                {
-                    return;
-
-                }
-                else
-                {
-                    this.Dispose();
-                }
-            }
-        }
-
-
-        // Static factory
-        public static AudioObj? FromFile(string filePath)
-        {
-            var obj = new AudioObj(filePath);
-            if (obj.LoadAudioFile())
-            {
-                return obj;
-            }
-            else
-            {
-                return null;
-            }
+		// Ctor
+		public AudioObj()
+		{
+			// Empty
 		}
 
+		public AudioObj(string filePath, bool load = false)
+		{
+			this.FilePath = filePath;
 
-		public static async Task<AudioObj?> FromFileAsync(string filePath)
-        {
-            var obj = await Task.Run(() => new AudioObj(filePath));
-            if (obj.LoadAudioFile())
-            {
-                return obj;
-            }
-            else
-            {
-                obj?.Dispose();
+			if (load)
+			{
+				if (this.LoadAudioFile())
+				{
+					return;
+
+				}
+				else
+				{
+					this.Dispose();
+				}
+			}
+		}
+
+		// Static factory
+		public static AudioObj? FromFile(string filePath)
+		{
+			var obj = new AudioObj(filePath);
+			if (obj.LoadAudioFile())
+			{
+				return obj;
+			}
+			else
+			{
 				return null;
 			}
 		}
 
+		public static async Task<AudioObj?> FromFileAsync(string filePath)
+		{
+			var obj = await Task.Run(() => new AudioObj(filePath));
+			if (obj.LoadAudioFile())
+			{
+				return obj;
+			}
+			else
+			{
+				obj?.Dispose();
+				return null;
+			}
+		}
 
-        // Clone
-        public AudioObj Clone()
-        {
-            AudioObj clone = new()
-            {
-                Id = Guid.NewGuid(),
-                Name = this.Name,
-                FilePath = this.FilePath,
-                Data = (float[]) this.Data.Clone(),
-                SampleRate = this.SampleRate,
-                Channels = this.Channels,
-                BitDepth = this.BitDepth,
-                Length = this.Length,
-                Duration = this.Duration,
-                Bpm = this.Bpm,
-                Timing = this.Timing,
-                Volume = this.Volume
-            };
+		// Clone
+		public AudioObj Clone()
+		{
+			AudioObj clone = new()
+			{
+				Id = Guid.NewGuid(),
+				Name = this.Name,
+				FilePath = this.FilePath,
+				Data = (float[]) this.Data.Clone(),
+				SampleRate = this.SampleRate,
+				Channels = this.Channels,
+				BitDepth = this.BitDepth,
+				Length = this.Length,
+				Duration = this.Duration,
+				Bpm = this.Bpm,
+				Timing = this.Timing,
+				Volume = this.Volume
+			};
 
-            return clone;
-        }
+			return clone;
+		}
 
-        public async Task<AudioObj> CloneAsync()
-        {
-            return await Task.Run(() => this.Clone());
-        }
+		public async Task<AudioObj> CloneAsync()
+		{
+			return await Task.Run(() => this.Clone());
+		}
 
+		public async Task<AudioObj?> CloneFromSelectionAsync()
+		{
+			if (this.Data == null || this.Data.LongLength <= 0 || this.SelectionEnd < 0 || this.SelectionStart < 0 || this.SelectionStart == this.SelectionEnd)
+			{
+				return null;
+			}
 
-        // IO Methods
-        public void Dispose()
-        {
-            this.player?.Stop();
-            this.Playing = false;
+			if (this.SelectionEnd < this.SelectionStart)
+			{
+				long swap = this.SelectionEnd;
+				this.SelectionEnd = this.SelectionStart;
+				this.SelectionStart = swap;
+			}
 
-            this.Data = [];
+			int channels = Math.Max(1, this.Channels);
+			long totalFrames = this.Data.LongLength;
+			long selStartFrame = Math.Clamp(this.SelectionStart, 0, totalFrames);
+			long selEndFrame = Math.Clamp(this.SelectionEnd, 0, totalFrames);
+			long selFrameCount = selEndFrame - selStartFrame;
 
-            this.WaveStream?.Dispose();
-            this.WaveStream = null;
-            this.player?.Dispose();
+			if (selFrameCount <= 0)
+			{
+				return null;
+			}
 
-            GC.SuppressFinalize(this);
-        }
+			AudioObj clone = new()
+			{
+				Name = this.Name + "_selection",
+				Data = new float[selFrameCount],
+				SampleRate = this.SampleRate,
+				Channels = this.Channels,
+				BitDepth = this.BitDepth,
+				Bpm = this.Bpm,
+				Timing = this.Timing,
+				Volume = this.Volume,
+				Length = selFrameCount,
+				Duration = TimeSpan.FromSeconds((double) selFrameCount / this.SampleRate)
+			};
 
-        public bool LoadAudioFile()
-        {
-            if (string.IsNullOrEmpty(this.FilePath))
-            {
-                return false;
-            }
+			// Block Copy
+			Buffer.BlockCopy(
+				src: this.Data,
+				srcOffset: (int) (selStartFrame * sizeof(float)),
+				dst: clone.Data,
+				dstOffset: 0,
+				count: (int) (selFrameCount * sizeof(float))
+			);
 
-            this.Name = Path.GetFileNameWithoutExtension(this.FilePath);
+			return clone;
+		}
 
-            Stopwatch sw = Stopwatch.StartNew();
+		// IO Methods
+		public void Dispose()
+		{
+			this.Playing = false;
+			this.Paused = false;
 
-            try
-            {
+			this.Data = [];
+
+			// Player stoppen/aufräumen
+			try { this.playback.Stop(); } catch { }
+
+			GC.SuppressFinalize(this);
+		}
+
+		public bool LoadAudioFile()
+		{
+			if (string.IsNullOrEmpty(this.FilePath))
+			{
+				return false;
+			}
+
+			this.Name = Path.GetFileNameWithoutExtension(this.FilePath);
+
+			Stopwatch sw = Stopwatch.StartNew();
+
+			try
+			{
 				using var reader = new AudioFileReader(this.FilePath);
 				this.SampleRate = reader.WaveFormat.SampleRate;
 				this.Channels = reader.WaveFormat.Channels;
@@ -299,339 +342,377 @@ namespace Breakbot404.Core
 				this.Length = this.Data.Length;
 				this.Duration = reader.TotalTime;
 			}
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Error loading audio file: {ex.Message}");
-                this.Dispose();
-                return false;
+			catch (Exception ex)
+			{
+				Debug.WriteLine($"Error loading audio file: {ex.Message}");
+				this.Dispose();
+				return false;
 			}
 
-            this["Import"] = sw.Elapsed.TotalMilliseconds;
-            sw.Restart();
+			this["Import"] = sw.Elapsed.TotalMilliseconds;
+			sw.Restart();
 
-            this.ReadBpmTag();
+			this.ReadBpmTag();
 
-            this["ReadBpmTag"] = sw.Elapsed.TotalMilliseconds;
-            sw.Stop();
+			this["ReadBpmTag"] = sw.Elapsed.TotalMilliseconds;
+			sw.Stop();
 
-            return true;
-        }
+			return true;
+		}
 
-        public float ReadBpmTag(string tag = "TBPM", bool set = true)
-        {
-            // Read bpm metadata if available
-            float bpm = 0.0f;
-            float roughBpm = 0.0f;
+		public float ReadBpmTag(string tag = "TBPM", bool set = true)
+		{
+			// Read bpm metadata if available
+			float bpm = 0.0f;
+			float roughBpm = 0.0f;
 
-            try
-            {
-                if (!string.IsNullOrEmpty(this.FilePath) && File.Exists(this.FilePath))
+			try
+			{
+				if (!string.IsNullOrEmpty(this.FilePath) && File.Exists(this.FilePath))
+				{
+					using var file = TagLib.File.Create(this.FilePath);
+					if (file.Tag.BeatsPerMinute > 0)
+					{
+						roughBpm = (float) file.Tag.BeatsPerMinute;
+					}
+					if (file.TagTypes.HasFlag(TagLib.TagTypes.Id3v2))
+					{
+						var id3v2Tag = (TagLib.Id3v2.Tag) file.GetTag(TagLib.TagTypes.Id3v2);
+
+						var tagTextFrame = TagLib.Id3v2.TextInformationFrame.Get(id3v2Tag, tag, false);
+
+						if (tagTextFrame != null && tagTextFrame.Text.Any())
+						{
+							string bpmString = tagTextFrame.Text.FirstOrDefault() ?? "0,0";
+							if (!string.IsNullOrEmpty(bpmString))
+							{
+								bpmString = bpmString.Replace(',', '.');
+
+								if (float.TryParse(bpmString, NumberStyles.Any, CultureInfo.InvariantCulture, out float parsedBpm))
+								{
+									bpm = parsedBpm;
+								}
+							}
+						}
+						else
+						{
+							bpm = 0.0f;
+						}
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Debug.WriteLine($"Fehler beim Lesen des Tags {tag.ToUpper()}: {ex.Message} ({ex.InnerException?.Message ?? " - "})");
+			}
+
+			// Take rough bpm if <= 0.0f
+			if (bpm <= 0.0f && roughBpm > 0.0f)
+			{
+				Console.WriteLine($"No value found for '{tag.ToUpper()}', taking rough BPM value from legacy tag.");
+				bpm = roughBpm;
+			}
+
+			if (set)
+			{
+				this.Bpm = bpm;
+				if (this.Bpm <= 10)
+				{
+					this.ReadBpmTagLegacy();
+				}
+			}
+
+			return bpm;
+		}
+
+		public float ReadBpmTagLegacy()
+		{
+			// Read bpm metadata if available
+			float bpm = 0.0f;
+
+			try
+			{
+				if (!string.IsNullOrEmpty(this.FilePath) && File.Exists(this.FilePath))
+				{
+					using var file = TagLib.File.Create(this.FilePath);
+					// Check for BPM in standard ID3v2 tag
+					if (file.Tag.BeatsPerMinute > 0)
+					{
+						bpm = (float) file.Tag.BeatsPerMinute;
+					}
+					// Alternative für spezielle Tags (z.B. TBPM Frame)
+					else if (file.TagTypes.HasFlag(TagLib.TagTypes.Id3v2))
+					{
+						var id3v2Tag = (TagLib.Id3v2.Tag) file.GetTag(TagLib.TagTypes.Id3v2);
+						var bpmFrame = TagLib.Id3v2.UserTextInformationFrame.Get(id3v2Tag, "BPM", false);
+
+						if (bpmFrame != null && float.TryParse(bpmFrame.Text.FirstOrDefault(), out float parsedBpm))
+						{
+							bpm = parsedBpm;
+						}
+					}
+				}
+			}
+			catch (Exception ex)
+			{
+				Debug.WriteLine($"Fehler beim Lesen der BPM: {ex.Message}");
+			}
+			this.Bpm = bpm > 0 ? bpm / 100.0f : 0.0f;
+			return this.Bpm;
+		}
+
+		// Data Methods
+		public async Task<byte[]> GetBytesAsync(int maxWorkers = 4)
+		{
+			maxWorkers = Math.Clamp(maxWorkers, 1, Environment.ProcessorCount);
+
+			if (this.Data == null || this.Data.Length == 0)
+			{
+				return [];
+			}
+
+			int bytesPerSample = this.BitDepth / 8;
+			byte[] result = new byte[this.Data.Length * bytesPerSample];
+
+			await Task.Run(() =>
+			{
+				var options = new ParallelOptions
+				{
+					MaxDegreeOfParallelism = maxWorkers
+				};
+
+				Parallel.For(0, this.Data.Length, options, i =>
+				{
+					float sample = this.Data[i];
+
+					switch (this.BitDepth)
+					{
+						case 8:
+							result[i] = (byte) (sample * 127f);
+							break;
+
+						case 16:
+							short sample16 = (short) (sample * short.MaxValue);
+							Span<byte> target16 = result.AsSpan(i * 2, 2);
+							BitConverter.TryWriteBytes(target16, sample16);
+							break;
+
+						case 24:
+							int sample24 = (int) (sample * 8_388_607f); // 2^23 - 1
+							Span<byte> target24 = result.AsSpan(i * 3, 3);
+							target24[0] = (byte) sample24;
+							target24[1] = (byte) (sample24 >> 8);
+							target24[2] = (byte) (sample24 >> 16);
+							break;
+
+						case 32:
+							Span<byte> target32 = result.AsSpan(i * 4, 4);
+							BitConverter.TryWriteBytes(target32, sample);
+							break;
+					}
+				});
+			});
+
+			return result;
+		}
+
+		public async Task<IEnumerable<float[]>> GetChunksAsync(int size = 2048, float overlap = 0.5f, bool keepData = false, int maxWorkers = 4)
+		{
+			maxWorkers = Math.Clamp(maxWorkers, 1, Environment.ProcessorCount);
+
+			// Input Validation (sync part for fast fail)
+			if (this.Data == null || this.Data.Length == 0)
+			{
+				return [];
+			}
+
+			if (size <= 0 || overlap < 0 || overlap >= 1)
+			{
+				return [];
+			}
+
+			// Calculate chunk metrics (sync)
+			this.ChunkSize = size;
+			this.OverlapSize = (int) (size * overlap);
+			int step = size - this.OverlapSize;
+			int numChunks = (this.Data.Length - size) / step + 1;
+
+			// Prepare result array
+			float[][] chunks = new float[numChunks][];
+
+			await Task.Run(() =>
+			{
+				// Parallel processing with optimal worker count
+				Parallel.For(0, numChunks, new ParallelOptions
+				{
+					MaxDegreeOfParallelism = maxWorkers
+				}, i =>
+				{
+					int sourceOffset = i * step;
+					float[] chunk = new float[size];
+					Buffer.BlockCopy(
+						src: this.Data,
+						srcOffset: sourceOffset * sizeof(float),
+						dst: chunk,
+						dstOffset: 0,
+						count: size * sizeof(float));
+					chunks[i] = chunk;
+				});
+			});
+
+			// Cleanup if requested
+			if (!keepData)
+			{
+				this.Data = [];
+			}
+
+			return chunks;
+		}
+
+		public async Task AggregateStretchedChunksAsync(IEnumerable<float[]> chunks, double stretchFactor = 1.0, int maxWorkers = 4)
+		{
+			maxWorkers = Math.Clamp(maxWorkers, 1, Environment.ProcessorCount);
+
+			if (chunks == null || !chunks.Any())
+			{
+				return;
+			}
+
+			this.StretchFactor = stretchFactor;
+
+			// Pre-calculate all values that don't change
+			int chunkSize = this.ChunkSize;
+			int overlapSize = this.OverlapSize;
+			int originalHopSize = chunkSize - overlapSize;
+			int stretchedHopSize = (int) Math.Round(originalHopSize * stretchFactor);
+			int outputLength = (chunks.Count() - 1) * stretchedHopSize + chunkSize;
+
+			// Create window function (cosine window)
+			double[] window = await Task.Run(() =>
+				Enumerable.Range(0, chunkSize)
+						  .Select(i => 0.5 * (1.0 - Math.Cos(2.0 * Math.PI * i / (chunkSize - 1))))
+						  .ToArray()
+			).ConfigureAwait(false);
+
+			// Logging: Chunks-Infos
+			var chunkList = chunks.ToList();
+			Debug.WriteLine($"[AggregateStretchedChunks] Chunks: {chunkList.Count}, ChunkSize: {chunkSize}, OutputLength: {outputLength}");
+			for (int c = 0; c < Math.Min(3, chunkList.Count); c++)
+			{
+				var arr = chunkList[c];
+				Debug.WriteLine($"Chunk[{c}] Length: {arr.Length}, Min: {arr.Min()}, Max: {arr.Max()}, First10: {string.Join(", ", arr.Take(10))}");
+			}
+
+			// Initialize accumulators in parallel
+			double[] outputAccumulator = new double[outputLength];
+			double[] weightSum = new double[outputLength];
+
+			await Task.Run(() =>
+			{
+				var parallelOptions = new ParallelOptions
+				{
+					MaxDegreeOfParallelism = maxWorkers
+				};
+
+				// Phase 1: Process chunks in parallel
+				Parallel.For(0, chunkList.Count, parallelOptions, chunkIndex =>
+				{
+					var chunk = chunkList[chunkIndex];
+					int offset = chunkIndex * stretchedHopSize;
+
+					for (int j = 0; j < Math.Min(chunkSize, chunk.Length); j++)
+					{
+						int idx = offset + j;
+						if (idx >= outputLength)
+						{
+							break;
+						}
+
+						double windowedSample = chunk[j] * window[j];
+
+						// Using Interlocked for thread-safe accumulation
+						Interlocked.Exchange(ref outputAccumulator[idx], outputAccumulator[idx] + windowedSample);
+						Interlocked.Exchange(ref weightSum[idx], weightSum[idx] + window[j]);
+					}
+				});
+
+				// Phase 2: Normalize results
+				float[] finalOutput = new float[outputLength];
+				Parallel.For(0, outputLength, parallelOptions, i =>
+				{
+					finalOutput[i] = weightSum[i] > 1e-6
+						? (float) (outputAccumulator[i] / weightSum[i])
+						: 0.0f;
+				});
+
+				// Final assignment (thread-safe)
+				this.Data = finalOutput;
+			}).ConfigureAwait(true);
+
+			// Logging: Output-Infos
+			Debug.WriteLine($"[AggregateStretchedChunks] Output Min: {this.Data.Min()}, Max: {this.Data.Max()}, First10: {string.Join(", ", this.Data.Take(10))}");
+		}
+
+		public async Task EraseSelectionAsync()
+		{
+			if (this.Data == null || this.Data.Length == 0 || this.SelectionEnd < 0 || this.SelectionStart < 0 || this.SelectionStart == this.SelectionEnd)
+			{
+				return;
+			}
+
+			if (this.SelectionEnd < this.SelectionStart)
+			{
+				long swap = this.SelectionEnd;
+				this.SelectionEnd = this.SelectionStart;
+				this.SelectionStart = swap;
+			}
+
+			// Interleavte Samples (Floats), keine Frames
+			long totalSamples = this.Data.LongLength;
+			long selStart = Math.Clamp(this.SelectionStart, 0, totalSamples);
+			long selEnd = Math.Clamp(this.SelectionEnd, 0, totalSamples);
+			long selCount = selEnd - selStart;
+			if (selCount <= 0)
+			{
+				return;
+			}
+
+			float[] newData = new float[this.Data.Length - selCount];
+			await Task.Run(() =>
+			{
+				int bytesBefore = checked((int) (selStart * sizeof(float)));
+				int srcAfterOffset = checked((int) (selEnd * sizeof(float)));
+				int bytesAfter = checked((int) ((totalSamples - selEnd) * sizeof(float)));
+				int dstAfterOffset = bytesBefore;
+
+				if (bytesBefore > 0)
                 {
-                    using var file = TagLib.File.Create(this.FilePath);
-                    if (file.Tag.BeatsPerMinute > 0)
-                    {
-                        roughBpm = (float) file.Tag.BeatsPerMinute;
-                    }
-                    if (file.TagTypes.HasFlag(TagLib.TagTypes.Id3v2))
-                    {
-                        var id3v2Tag = (TagLib.Id3v2.Tag) file.GetTag(TagLib.TagTypes.Id3v2);
-
-                        var tagTextFrame = TagLib.Id3v2.TextInformationFrame.Get(id3v2Tag, tag, false);
-
-                        if (tagTextFrame != null && tagTextFrame.Text.Any())
-                        {
-                            string bpmString = tagTextFrame.Text.FirstOrDefault() ?? "0,0";
-                            if (!string.IsNullOrEmpty(bpmString))
-                            {
-                                bpmString = bpmString.Replace(',', '.');
-
-                                if (float.TryParse(bpmString, NumberStyles.Any, CultureInfo.InvariantCulture, out float parsedBpm))
-                                {
-                                    bpm = parsedBpm;
-                                }
-                            }
-                        }
-                        else
-                        {
-                            bpm = 0.0f;
-                        }
-                    }
+                    Buffer.BlockCopy(this.Data, 0, newData, 0, bytesBefore);
                 }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Fehler beim Lesen des Tags {tag.ToUpper()}: {ex.Message} ({ex.InnerException?.Message ?? " - "})");
-            }
 
-            // Take rough bpm if <= 0.0f
-            if (bpm <= 0.0f && roughBpm > 0.0f)
-            {
-                Console.WriteLine($"No value found for '{tag.ToUpper()}', taking rough BPM value from legacy tag.");
-                bpm = roughBpm;
-            }
-
-            if (set)
-            {
-                this.Bpm = bpm;
-                if (this.Bpm <= 10)
+                if (bytesAfter > 0)
                 {
-                    this.ReadBpmTagLegacy();
+                    Buffer.BlockCopy(this.Data, srcAfterOffset, newData, dstAfterOffset, bytesAfter);
                 }
-            }
-
-            return bpm;
-        }
-
-        public float ReadBpmTagLegacy()
-        {
-            // Read bpm metadata if available
-            float bpm = 0.0f;
-
-            try
-            {
-                if (!string.IsNullOrEmpty(this.FilePath) && File.Exists(this.FilePath))
-                {
-                    using var file = TagLib.File.Create(this.FilePath);
-                    // Check for BPM in standard ID3v2 tag
-                    if (file.Tag.BeatsPerMinute > 0)
-                    {
-                        bpm = (float) file.Tag.BeatsPerMinute;
-                    }
-                    // Alternative für spezielle Tags (z.B. TBPM Frame)
-                    else if (file.TagTypes.HasFlag(TagLib.TagTypes.Id3v2))
-                    {
-                        var id3v2Tag = (TagLib.Id3v2.Tag) file.GetTag(TagLib.TagTypes.Id3v2);
-                        var bpmFrame = TagLib.Id3v2.UserTextInformationFrame.Get(id3v2Tag, "BPM", false);
-
-                        if (bpmFrame != null && float.TryParse(bpmFrame.Text.FirstOrDefault(), out float parsedBpm))
-                        {
-                            bpm = parsedBpm;
-                        }
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                Debug.WriteLine($"Fehler beim Lesen der BPM: {ex.Message}");
-            }
-            this.Bpm = bpm > 0 ? bpm / 100.0f : 0.0f;
-            return this.Bpm;
-        }
-
-
-        // Data Methods
-        public async Task<byte[]> GetBytesAsync(int maxWorkers = 4)
-        {
-            maxWorkers = Math.Clamp(maxWorkers, 1, Environment.ProcessorCount);
-
-            if (this.Data == null || this.Data.Length == 0)
-            {
-                return [];
-            }
-
-            int bytesPerSample = this.BitDepth / 8;
-            byte[] result = new byte[this.Data.Length * bytesPerSample];
-
-            await Task.Run(() =>
-            {
-                var options = new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = maxWorkers
-                };
-
-                Parallel.For(0, this.Data.Length, options, i =>
-                {
-                    float sample = this.Data[i];
-
-                    switch (this.BitDepth)
-                    {
-                        case 8:
-                            result[i] = (byte) (sample * 127f);
-                            break;
-
-                        case 16:
-                            short sample16 = (short) (sample * short.MaxValue);
-                            Span<byte> target16 = result.AsSpan(i * 2, 2);
-                            BitConverter.TryWriteBytes(target16, sample16);
-                            break;
-
-                        case 24:
-                            int sample24 = (int) (sample * 8_388_607f); // 2^23 - 1
-                            Span<byte> target24 = result.AsSpan(i * 3, 3);
-                            target24[0] = (byte) sample24;
-                            target24[1] = (byte) (sample24 >> 8);
-                            target24[2] = (byte) (sample24 >> 16);
-                            break;
-
-                        case 32:
-                            Span<byte> target32 = result.AsSpan(i * 4, 4);
-                            BitConverter.TryWriteBytes(target32, sample);
-                            break;
-                    }
-                });
             });
 
-            return result;
-        }
+			this.Data = newData;
+			int channels = Math.Max(1, this.Channels);
+			this.Length = this.Data.Length;
+			this.Duration = TimeSpan.FromSeconds((double) this.Data.Length / (this.SampleRate * channels));
 
-        public async Task<IEnumerable<float[]>> GetChunksAsync(int size = 2048, float overlap = 0.5f, bool keepData = false, int maxWorkers = 4)
-        {
-            maxWorkers = Math.Clamp(maxWorkers, 1, Environment.ProcessorCount);
+			this.SelectionStart = -1;
+			this.SelectionEnd = -1;
+		}
 
-            // Input Validation (sync part for fast fail)
-            if (this.Data == null || this.Data.Length == 0)
-            {
-                return [];
-            }
-
-            if (size <= 0 || overlap < 0 || overlap >= 1)
-            {
-                return [];
-            }
-
-            // Calculate chunk metrics (sync)
-            this.ChunkSize = size;
-            this.OverlapSize = (int) (size * overlap);
-            int step = size - this.OverlapSize;
-            int numChunks = (this.Data.Length - size) / step + 1;
-
-            // Prepare result array
-            float[][] chunks = new float[numChunks][];
-
-            await Task.Run(() =>
-            {
-                // Parallel processing with optimal worker count
-                Parallel.For(0, numChunks, new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = maxWorkers
-                }, i =>
-                {
-                    int sourceOffset = i * step;
-                    float[] chunk = new float[size];
-                    Buffer.BlockCopy(
-                        src: this.Data,
-                        srcOffset: sourceOffset * sizeof(float),
-                        dst: chunk,
-                        dstOffset: 0,
-                        count: size * sizeof(float));
-                    chunks[i] = chunk;
-                });
-            });
-
-            // Cleanup if requested
-            if (!keepData)
-            {
-                this.Data = [];
-            }
-
-            return chunks;
-        }
-
-        public async Task AggregateStretchedChunksAsync(IEnumerable<float[]> chunks, double stretchFactor = 1.0, int maxWorkers = 4)
-        {
-            maxWorkers = Math.Clamp(maxWorkers, 1, Environment.ProcessorCount);
-
-            if (chunks == null || !chunks.Any())
-            {
-                return;
-            }
-
-            this.StretchFactor = stretchFactor;
-
-            // Pre-calculate all values that don't change
-            int chunkSize = this.ChunkSize;
-            int overlapSize = this.OverlapSize;
-            int originalHopSize = chunkSize - overlapSize;
-            int stretchedHopSize = (int) Math.Round(originalHopSize * stretchFactor);
-            int outputLength = (chunks.Count() - 1) * stretchedHopSize + chunkSize;
-
-            // Create window function (cosine window)
-            double[] window = await Task.Run(() =>
-                Enumerable.Range(0, chunkSize)
-                          .Select(i => 0.5 * (1.0 - Math.Cos(2.0 * Math.PI * i / (chunkSize - 1))))
-                          .ToArray()
-            ).ConfigureAwait(false);
-
-            // Logging: Chunks-Infos
-            var chunkList = chunks.ToList();
-            Debug.WriteLine($"[AggregateStretchedChunks] Chunks: {chunkList.Count}, ChunkSize: {chunkSize}, OutputLength: {outputLength}");
-            for (int c = 0; c < Math.Min(3, chunkList.Count); c++)
-            {
-                var arr = chunkList[c];
-                Debug.WriteLine($"Chunk[{c}] Length: {arr.Length}, Min: {arr.Min()}, Max: {arr.Max()}, First10: {string.Join(", ", arr.Take(10))}");
-            }
-
-            // Initialize accumulators in parallel
-            double[] outputAccumulator = new double[outputLength];
-            double[] weightSum = new double[outputLength];
-
-            await Task.Run(() =>
-            {
-                var parallelOptions = new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = maxWorkers
-                };
-
-                // Phase 1: Process chunks in parallel
-                Parallel.For(0, chunkList.Count, parallelOptions, chunkIndex =>
-                {
-                    var chunk = chunkList[chunkIndex];
-                    int offset = chunkIndex * stretchedHopSize;
-
-                    for (int j = 0; j < Math.Min(chunkSize, chunk.Length); j++)
-                    {
-                        int idx = offset + j;
-                        if (idx >= outputLength)
-                        {
-                            break;
-                        }
-
-                        double windowedSample = chunk[j] * window[j];
-
-                        // Using Interlocked for thread-safe accumulation
-                        Interlocked.Exchange(ref outputAccumulator[idx], outputAccumulator[idx] + windowedSample);
-                        Interlocked.Exchange(ref weightSum[idx], weightSum[idx] + window[j]);
-                    }
-                });
-
-                // Phase 2: Normalize results
-                float[] finalOutput = new float[outputLength];
-                Parallel.For(0, outputLength, parallelOptions, i =>
-                {
-                    finalOutput[i] = weightSum[i] > 1e-6
-                        ? (float) (outputAccumulator[i] / weightSum[i])
-                        : 0.0f;
-                });
-
-                // Final assignment (thread-safe)
-                this.Data = finalOutput;
-            }).ConfigureAwait(true);
-
-            // Logging: Output-Infos
-            Debug.WriteLine($"[AggregateStretchedChunks] Output Min: {this.Data.Min()}, Max: {this.Data.Max()}, First10: {string.Join(", ", this.Data.Take(10))}");
-        }
-
-
-		// Playback Methods
+		// Playback Methods (umgestellt auf AudioPlaybackService)
 		public async Task PlayAsync(CancellationToken cancellationToken, Action? onPlaybackStopped = null, float? initialVolume = null, int desiredLatency = 50)
 		{
 			this.Playing = true;
 			this.Paused = false;
 			initialVolume ??= this.Volume / 100f;
 
-			if (this.player.PlaybackState != PlaybackState.Paused)
-			{
-				this.player.Stop();
-				this.WaveStream?.Dispose();
-				this.WaveStream = null;
-				this.Paused = false;
-			}
-			else
-			{
-				this.Paused = false;
-			}
-
-			if (this.Data == null || this.Data.Length == 0)
+			if (this.Data == null || this.Data.Length == 0 || this.SampleRate <= 0 || this.Channels <= 0)
 			{
 				this.Playing = false;
 				return;
@@ -639,15 +720,12 @@ namespace Breakbot404.Core
 
 			try
 			{
-				byte[] bytes = await this.GetBytesAsync();
-				var waveFormat = WaveFormat.CreateIeeeFloatWaveFormat(this.SampleRate, this.Channels);
-				var memoryStream = new MemoryStream(bytes);
-				var audioStream = new RawSourceWaveStream(memoryStream, waveFormat);
+				// Start-Offset in Samples (interleaved) aus Byte-Offset berechnen
+				int bytesPerFrame = Math.Max(1, this.Channels) * sizeof(float);
+				long startFrames = this.SkippedPositionBytes / bytesPerFrame;
+				long startSampleIndex = startFrames * this.Channels;
 
-				long desiredPos = Math.Clamp(this.SkippedPositionBytes, 0, audioStream.Length);
-				audioStream.Position = desiredPos;
-				this.SkippedPositionBytes = desiredPos; // sicherheitshalber
-
+				// Player-Event binden (einmalig robust)
 				EventHandler<StoppedEventArgs>? handler = null;
 				handler = (sender, args) =>
 				{
@@ -656,40 +734,30 @@ namespace Breakbot404.Core
 					{
 						this.Playing = false;
 						this.Paused = false;
-						this.WaveStream = null;
-						this.player.PlaybackStopped -= handler!;
-						audioStream.Dispose();
-						memoryStream.Dispose();
+						this.playback.PlaybackStopped -= handler!;
 					}
 				};
-				this.player.PlaybackStopped += handler;
+				this.playback.PlaybackStopped += handler;
 
-				using (cancellationToken.Register(() => this.player?.Stop()))
+				using (cancellationToken.Register(() => this.playback.Stop()))
 				{
-					this.WaveStream = audioStream;
-                    this.player.Volume = initialVolume.Value;
-                    this.player.DesiredLatency = desiredLatency;
-					this.player.Init(audioStream);
-                    
+					await this.playback.InitializePlayback(
+						data: this.Data,
+						sampleRate: this.SampleRate,
+						channels: this.Channels,
+						startSampleIndex: startSampleIndex,
+						deviceSampleRate: this.SampleRate,            // konstantes Geräteformat
+						desiredLatency: desiredLatency,
+						initialVolume: initialVolume.Value);
 
-
-					_ = Task.Run(() =>
+					// Rate anwenden (Varispeed)
+					if (Math.Abs(this.SampleRateFactor - 1.0) > double.Epsilon)
 					{
-						try
-						{
-							// Baseline direkt vor dem Play setzen (sollte 0 nach Init sein, aber defensiv)
-							this.positionOriginBytes = this.player.GetPosition();
+						await this.playback.AdjustSampleRate((float) this.SampleRateFactor);
+					}
 
-							this.player.Play();
-							while (this.player.PlaybackState == PlaybackState.Playing)
-							{
-								cancellationToken.ThrowIfCancellationRequested();
-								Thread.Sleep(50);
-							}
-						}
-						catch (OperationCanceledException) { }
-						catch (Exception ex) { Debug.WriteLine($"Playback error: {ex.Message}"); }
-					}, cancellationToken);
+					// Baseline setzen
+					this.positionOriginBytes = this.playback.GetPositionBytes();
 				}
 			}
 			catch (OperationCanceledException)
@@ -707,33 +775,40 @@ namespace Breakbot404.Core
 
 		public async Task PauseAsync()
 		{
-			if (this.player.PlaybackState == PlaybackState.Playing)
+			// Toggle-Logik beibehalten
+			if (this.PlayerPlaying)
 			{
-				long gp = this.player.GetPosition();
+				long gp = 0;
+				try { gp = this.playback.GetPositionBytes(); } catch { gp = 0; }
 				long delta = gp - this.positionOriginBytes;
-				if (delta < 0) delta = 0;
+				if (delta < 0) { delta = 0; }
 
 				long newAbsolute = this.SkippedPositionBytes + delta;
-				if (this.WaveStream != null)
-				{
-					newAbsolute = Math.Clamp(newAbsolute, 0, this.WaveStream.Length);
-				}
+				// Clamp auf Datenlänge
+				int ch = Math.Max(1, this.Channels);
+				int bytesPerFrame = ch * sizeof(float);
+				long totalFrames = (this.Data?.LongLength ?? 0L) / ch;
+				long totalBytes = totalFrames * bytesPerFrame;
+				newAbsolute = Math.Clamp(newAbsolute, 0, totalBytes);
+
 				this.SkippedPositionBytes = newAbsolute;
 
+				this.playback.Pause();
 				this.Playing = false;
 				this.Paused = true;
-				await Task.Run(this.player.Pause);
 				// Baseline auf aktuellen gp setzen, damit Resume wieder bei 0-Delta startet
 				this.positionOriginBytes = gp;
+				await Task.CompletedTask;
 			}
-			else if (this.player.PlaybackState == PlaybackState.Paused)
+			else if (this.Paused)
 			{
 				// Vor dem Fortsetzen Baseline aktualisieren
-				this.positionOriginBytes = this.player.GetPosition();
+				try { this.positionOriginBytes = this.playback.GetPositionBytes(); } catch { this.positionOriginBytes = 0; }
 
 				this.Playing = true;
 				this.Paused = false;
-				await Task.Run(this.player.Play);
+				this.playback.Resume();
+				await Task.CompletedTask;
 			}
 		}
 
@@ -741,232 +816,231 @@ namespace Breakbot404.Core
 		{
 			this.Playing = false;
 			this.Paused = false;
-			if (this.WaveStream != null)
-			{
-				await this.WaveStream.DisposeAsync();
-				this.WaveStream = null;
-			}
+
+			this.playback.Stop();
+
 			this.SkippedPositionBytes = 0;
 			this.positionOriginBytes = 0;
-			this.player.Stop();
+			await Task.CompletedTask;
 		}
 
 		public void SetVolume(float volume)
-        {
-            volume = Math.Clamp(volume, 0.0f, 1.0f);
-            this.Volume = volume * 100f;
-            this.player.Volume = volume;
+		{
+			volume = Math.Clamp(volume, 0.0f, 1.0f);
+			this.Volume = volume * 100f;
+			this.playback.SetVolume(volume);
 		}
 
-		// SetPosition: Frames -> Bytes; immer Basisoffset setzen, WaveStream nur wenn vorhanden
+		// SetPosition: Frames -> Bytes; BasiseOffset setzen, ggf. nur merken (Seek beim nächsten Play)
 		public void SetPosition(long framePosition)
 		{
 			int channels = Math.Max(1, this.Channels);
-			int bytesPerFrame = this.WaveStream?.WaveFormat.BlockAlign ?? channels * sizeof(float);
+			int bytesPerFrame = channels * sizeof(float);
 			long totalFrames = (this.Data?.LongLength ?? 0L) / channels;
 			long totalBytes = totalFrames * bytesPerFrame;
 
-			long bytePosition = framePosition * (long)bytesPerFrame;
+			long bytePosition = framePosition * (long) bytesPerFrame;
 			bytePosition = Math.Clamp(bytePosition, 0, totalBytes);
 
 			this.SkippedPositionBytes = bytePosition;
-			if (this.WaveStream != null && this.WaveStream.CanSeek)
-			{
-				try { this.WaveStream.Position = bytePosition; }
-				catch (Exception ex)
-				{
-					string msg = $"Error setting position: {ex.Message}";
-					LogCollection.Log(msg);
-					Debug.WriteLine(msg);
-				}
-			}
+
+			// Optional: Wenn gerade gespielt wird, kann hier aktiv neu initialisiert werden (Seek)
+			// Für “vorsichtig umstellen” belassen wir Seek auf den nächsten Play-Start.
 		}
 
-		// Seek: Sekunden -> Frames -> SetPosition
 		public void Seek(double seconds)
 		{
-			long frames = (long)Math.Round(seconds * this.SampleRate);
-			SetPosition(frames);
+			long frames = (long) Math.Round(seconds * this.SampleRate);
+			this.SetPosition(frames);
+		}
+
+		public async Task AdjustSampleRate(float factor)
+		{
+			this.SampleRateFactor = factor;
+
+			if (this.PlayerPlaying)
+			{
+				await this.playback.AdjustSampleRate((float) this.SampleRateFactor);
+			}
 		}
 
 		// Processing (basic) Methods
 		public async Task NormalizeAsync(float maxAmplitude = 1.0f, int maxWorkers = 4)
-        {
-            maxWorkers = Math.Clamp(maxWorkers, 1, Environment.ProcessorCount);
+		{
+			maxWorkers = Math.Clamp(maxWorkers, 1, Environment.ProcessorCount);
 
-            if (this.Data == null || this.Data.Length == 0)
-            {
-                return;
-            }
+			if (this.Data == null || this.Data.Length == 0)
+			{
+				return;
+			}
 
-            var parallelOptions = new ParallelOptions
-            {
-                MaxDegreeOfParallelism = maxWorkers
-            };
+			var parallelOptions = new ParallelOptions
+			{
+				MaxDegreeOfParallelism = maxWorkers
+			};
 
-            Stopwatch sw = Stopwatch.StartNew();
+			Stopwatch sw = Stopwatch.StartNew();
 
-            // Phase 1: Find global maximum (parallel + async)
-            float globalMax = await Task.Run(() =>
-            {
-                float max = 0f;
-                Parallel.For(0, this.Data.Length, parallelOptions,
-                    () => 0f,
-                    (i, _, localMax) => Math.Max(Math.Abs(this.Data[i]), localMax),
-                    localMax => { lock (this) { max = Math.Max(max, localMax); } }
-                );
-                return max;
-            }).ConfigureAwait(false);
+			// Phase 1: Find global maximum (parallel + async)
+			float globalMax = await Task.Run(() =>
+			{
+				float max = 0f;
+				Parallel.For(0, this.Data.Length, parallelOptions,
+					() => 0f,
+					(i, _, localMax) => Math.Max(Math.Abs(this.Data[i]), localMax),
+					localMax => { lock (this) { max = Math.Max(max, localMax); } }
+				);
+				return max;
+			}).ConfigureAwait(false);
 
-            if (globalMax == 0f)
-            {
-                return;
-            }
+			if (globalMax == 0f)
+			{
+				return;
+			}
 
-            // Phase 2: Apply scaling (parallel + async)
-            float scale = maxAmplitude / globalMax;
-            await Task.Run(() =>
-            {
-                Parallel.For(0, this.Data.Length, parallelOptions, i =>
-                {
-                    this.Data[i] *= scale;
-                });
-            }).ConfigureAwait(false);
+			// Phase 2: Apply scaling (parallel + async)
+			float scale = maxAmplitude / globalMax;
+			await Task.Run(() =>
+			{
+				Parallel.For(0, this.Data.Length, parallelOptions, i =>
+				{
+					this.Data[i] *= scale;
+				});
+			}).ConfigureAwait(false);
 
-            sw.Stop();
-            this["Normalize"] = sw.Elapsed.TotalMilliseconds;
-        }
+			sw.Stop();
+			this["Normalize"] = sw.Elapsed.TotalMilliseconds;
+		}
 
-        public async Task<float[]> ConvertToMonoAsync(bool set = false, int maxWorkers = 4)
-        {
-            maxWorkers = Math.Clamp(maxWorkers, 1, Environment.ProcessorCount);
+		public async Task<float[]> ConvertToMonoAsync(bool set = false, int maxWorkers = 4)
+		{
+			maxWorkers = Math.Clamp(maxWorkers, 1, Environment.ProcessorCount);
 
-            if (this.Data == null || this.Data.Length == 0 || this.Channels <= 0)
-            {
-                return [];
-            }
+			if (this.Data == null || this.Data.Length == 0 || this.Channels <= 0)
+			{
+				return [];
+			}
 
-            // Calculate the number of samples in mono
-            int monoSampleCount = this.Data.Length / this.Channels;
-            float[] monoData = new float[monoSampleCount];
+			// Calculate the number of samples in mono
+			int monoSampleCount = this.Data.Length / this.Channels;
+			float[] monoData = new float[monoSampleCount];
 
-            await Task.Run(() =>
-            {
-                Parallel.For(0, monoSampleCount, new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = maxWorkers
-                }, i =>
-                {
-                    float sum = 0.0f;
-                    for (int channel = 0; channel < this.Channels; channel++)
-                    {
-                        sum += this.Data[i * this.Channels + channel];
-                    }
-                    monoData[i] = sum / this.Channels;
-                });
-            });
+			await Task.Run(() =>
+			{
+				Parallel.For(0, monoSampleCount, new ParallelOptions
+				{
+					MaxDegreeOfParallelism = maxWorkers
+				}, i =>
+				{
+					float sum = 0.0f;
+					for (int channel = 0; channel < this.Channels; channel++)
+					{
+						sum += this.Data[i * this.Channels + channel];
+					}
+					monoData[i] = sum / this.Channels;
+				});
+			});
 
-            if (set)
-            {
-                this.Data = monoData;
-                this.Channels = 1;
-            }
+			if (set)
+			{
+				this.Data = monoData;
+				this.Channels = 1;
+			}
 
-            return monoData;
-        }
+			return monoData;
+		}
 
-        public async Task<float[]> GetCurrentWindowAsync(int windowSize = 65536, int lookingRange = 2, bool mono = false, bool lookBackwards = false)
-        {
-            if (this.Data == null || this.Data.Length == 0 || this.SampleRate <= 0 || this.Channels <= 0)
-            {
-                return [];
-            }
+		public async Task<float[]> GetCurrentWindowAsync(int windowSize = 65536, int lookingRange = 2, bool mono = false, bool lookBackwards = false)
+		{
+			if (this.Data == null || this.Data.Length == 0 || this.SampleRate <= 0 || this.Channels <= 0)
+			{
+				return [];
+			}
 
-            // Parameter normalisieren
-            windowSize = Math.Max(1, windowSize);
-            lookingRange = Math.Max(1, lookingRange);
-            // Für spätere FFTs oft sinnvoll: auf Potenz von 2 schnappen
-            windowSize = (int) Math.Pow(2, Math.Ceiling(Math.Log(windowSize, 2)));
+			// Parameter normalisieren
+			windowSize = Math.Max(1, windowSize);
+			lookingRange = Math.Max(1, lookingRange);
+			// Für spätere FFTs oft sinnvoll: auf Potenz von 2 schnappen
+			windowSize = (int) Math.Pow(2, Math.Ceiling(Math.Log(windowSize, 2)));
 
-            // Position in Frames (position ist bereits frame-basiert)
-            long posFrames = this.Position;
+			// Position in Frames (position ist bereits frame-basiert)
+			long posFrames = this.Position;
 
-            // Fensterbreite in Frames: um pos herum jeweils die Hälfte
-            int halfWindowFrames = (windowSize * lookingRange) / 2;
-            int fullWindowFrames = halfWindowFrames * 2;
-            if (fullWindowFrames <= 0)
-            {
-                return [];
-            }
+			// Fensterbreite in Frames: um pos herum jeweils die Hälfte
+			int halfWindowFrames = (windowSize * lookingRange) / 2;
+			int fullWindowFrames = halfWindowFrames * 2;
+			if (fullWindowFrames <= 0)
+			{
+				return [];
+			}
 
-            if (mono)
-            {
-                // Mono-Daten (Frames == Samples)
-                float[] data = await this.ConvertToMonoAsync(false);
-                if (data.Length == 0)
-                {
-                    return [];
-                }
+			if (mono)
+			{
+				// Mono-Daten (Frames == Samples)
+				float[] data = await this.ConvertToMonoAsync(false);
+				if (data.Length == 0)
+				{
+					return [];
+				}
 
-                long startFrame = posFrames - (lookBackwards ? halfWindowFrames : 0);
-                long endFrameExclusive = startFrame + fullWindowFrames;
+				long startFrame = posFrames - (lookBackwards ? halfWindowFrames : 0);
+				long endFrameExclusive = startFrame + fullWindowFrames;
 
-                // Out-of-bounds vermeiden, verschieben
-                while (endFrameExclusive > data.Length)
-                {
-                    startFrame -= windowSize;
-                    endFrameExclusive -= windowSize;
-                }
+				// Out-of-bounds vermeiden, verschieben
+				while (endFrameExclusive > data.Length)
+				{
+					startFrame -= windowSize;
+					endFrameExclusive -= windowSize;
+				}
 
-                while (startFrame < 0)
-                {
-                    startFrame += windowSize;
-                    endFrameExclusive += windowSize;
-                }
+				while (startFrame < 0)
+				{
+					startFrame += windowSize;
+					endFrameExclusive += windowSize;
+				}
 
-                if (endFrameExclusive > data.LongLength)
-                {
-                    return [];
-                }
+				if (endFrameExclusive > data.LongLength)
+				{
+					return [];
+				}
 
-                float[] current = new float[fullWindowFrames];
-                await Task.Run(() => Array.Copy(data, (int) startFrame, current, 0, fullWindowFrames));
-                return current;
-            }
-            else
-            {
-                // Interleaved Mehrkanal-Daten (Floats)
-                float[] data = this.Data;
+				float[] current = new float[fullWindowFrames];
+				await Task.Run(() => Array.Copy(data, (int) startFrame, current, 0, fullWindowFrames));
+				return current;
+			}
+			else
+			{
+				// Interleaved Mehrkanal-Daten (Floats)
+				float[] data = this.Data;
 
-                long startFloatIndex = (posFrames - (lookBackwards ? halfWindowFrames : 0)) * this.Channels;
-                long endFloatIndexExclusive = startFloatIndex + ((long) fullWindowFrames * this.Channels);
+				long startFloatIndex = (posFrames - (lookBackwards ? halfWindowFrames : 0)) * this.Channels;
+				long endFloatIndexExclusive = startFloatIndex + ((long) fullWindowFrames * this.Channels);
 
-                while (endFloatIndexExclusive > data.Length)
-                {
-                    startFloatIndex -= windowSize * this.Channels;
-                    endFloatIndexExclusive -= windowSize * this.Channels;
-                }
+				while (endFloatIndexExclusive > data.Length)
+				{
+					startFloatIndex -= windowSize * this.Channels;
+					endFloatIndexExclusive -= windowSize * this.Channels;
+				}
 
-                while (startFloatIndex < 0)
-                {
-                    startFloatIndex += windowSize * this.Channels;
-                    endFloatIndexExclusive += windowSize * this.Channels;
-                }
+				while (startFloatIndex < 0)
+				{
+					startFloatIndex += windowSize * this.Channels;
+					endFloatIndexExclusive += windowSize * this.Channels;
+				}
 
-                if (endFloatIndexExclusive > data.LongLength || startFloatIndex < 0)
-                {
-                    Debug.WriteLine("GetCurrentWindow: Out of bounds access prevented.");
-                    // Out-of-bounds, verschieben
-                    return [];
-                }
+				if (endFloatIndexExclusive > data.LongLength || startFloatIndex < 0)
+				{
+					Debug.WriteLine("GetCurrentWindow: Out of bounds access prevented.");
+					// Out-of-bounds, verschieben
+					return [];
+				}
 
-                int lengthFloats = fullWindowFrames * this.Channels;
-                float[] current = new float[lengthFloats];
-                await Task.Run(() => Array.Copy(data, (int) startFloatIndex, current, 0, lengthFloats));
-                return current;
-            }
-        }
-
+				int lengthFloats = fullWindowFrames * this.Channels;
+				float[] current = new float[lengthFloats];
+				await Task.Run(() => Array.Copy(data, (int) startFloatIndex, current, 0, lengthFloats));
+				return current;
+			}
+		}
 
 		// Waveform Bitmap Methods
 		[SupportedOSPlatform("windows")]
@@ -1005,7 +1079,7 @@ namespace Breakbot404.Core
 					for (int x = 0; x < width; x++)
 					{
 						// offset ist Frame-basiert -> in Data-Index umrechnen: frame * Channels
-						long offsetIndices = offset.Value * this.Channels; // ⬅️ VORHERIGE KORREKTUR
+						long offsetIndices = offset.Value * this.Channels;
 
 						long sampleStart = offsetIndices + (long) x * samplesPerPixel * this.Channels + channelIndex;
 						long sampleEnd = Math.Min(sampleStart + (long) samplesPerPixel * this.Channels, this.Data.Length);
@@ -1018,8 +1092,15 @@ namespace Breakbot404.Core
 						for (long s = sampleStart; s < sampleEnd; s += this.Channels)
 						{
 							float sample = this.Data[s];
-							if (sample < min) min = sample;
-							if (sample > max) max = sample;
+							if (sample < min)
+							{
+								min = sample;
+							}
+
+							if (sample > max)
+							{
+								max = sample;
+							}
 						}
 
 						int yMin = centerY - (int) (min * (channelHeight / 2));
@@ -1034,6 +1115,54 @@ namespace Breakbot404.Core
 			using (var pen = new Pen(waveColor.Value))
 			{
 				g.Clear(backColor.Value);
+
+				// 1) Auswahlbereich als helleren Hintergrund zeichnen (falls gesetzt)
+				// SelectionStart/End sind interleaved Sample-Indizes → in Frames (pro Kanal) umrechnen
+				long selStart = this.SelectionStart;
+				long selEnd = this.SelectionEnd;
+				if (this.Channels > 0 & !(selStart < 0 || selEnd < 0))
+				{
+					if (selEnd < selStart)
+					{
+						// Swap
+						long tmp = selStart;
+						selStart = selEnd;
+						selEnd = tmp;
+					}
+
+					int ch = Math.Max(1, this.Channels);
+					long selStartFrames = selStart / ch;
+					long selEndFrames = selEnd / ch;
+
+					long viewStartFrames = offset.Value;
+					long viewEndFrames = viewStartFrames + (long) width * samplesPerPixel;
+
+					long highlightStartFrames = Math.Max(viewStartFrames, selStartFrames);
+					long highlightEndFrames = Math.Min(viewEndFrames, selEndFrames);
+
+					if (highlightEndFrames > highlightStartFrames)
+					{
+						double invSPP = 1.0 / samplesPerPixel;
+						int x1 = (int) Math.Floor((highlightStartFrames - viewStartFrames) * invSPP);
+						int x2 = (int) Math.Ceiling((highlightEndFrames - viewStartFrames) * invSPP);
+
+						int rectX = Math.Clamp(x1, 0, width);
+						int rectW = Math.Clamp(x2 - rectX, 0, width - rectX);
+
+						if (rectW > 0)
+						{
+							// Heller machen: halbtransparente weiße Fläche über Hintergrund
+							// Fallback: wenn Hintergrund sehr hell ist, leicht grauer Ton nutzen
+							Color overlay = backColor.Value.GetBrightness() > 0.92f
+								? Color.FromArgb(28, 0, 0, 0)   // minimal abdunkeln, damit sichtbar bleibt
+								: Color.FromArgb(48, 255, 255, 255); // aufhellen
+							using var selBrush = new SolidBrush(overlay);
+							g.FillRectangle(selBrush, rectX, 0, rectW, height);
+						}
+					}
+				}
+
+				// 2) Waveform zeichnen
 				for (int channelIndex = 0; channelIndex < channelsToDraw; channelIndex++)
 				{
 					// CenterY hier neu berechnen, da im Zeichnungsblock benötigt
@@ -1057,7 +1186,7 @@ namespace Breakbot404.Core
 					}
 				}
 
-				// Caret zeichnen: Division nur durch samplesPerPixel (offset und Position sind frames)
+				// 3) Caret zeichnen: Division nur durch samplesPerPixel (offset und Position sind frames)
 				if (caretWidth > 0)
 				{
 					using var caretPen = new Pen(caretColor.Value, caretWidth);
@@ -1070,16 +1199,16 @@ namespace Breakbot404.Core
 			if (smoothen)
 			{
 				await Task.Run(() =>
-                {
-                    var smoothBitmap = new Bitmap(width, height);
-                    using (var gSmooth = Graphics.FromImage(smoothBitmap))
-                    {
-                        gSmooth.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
-                        gSmooth.DrawImage(bitmap, new Rectangle(0, 0, width, height));
-                    }
-                    bitmap.Dispose();
-                    bitmap = smoothBitmap;
-                }).ConfigureAwait(false);
+				{
+					var smoothBitmap = new Bitmap(width, height);
+					using (var gSmooth = Graphics.FromImage(smoothBitmap))
+					{
+						gSmooth.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+						gSmooth.DrawImage(bitmap, new Rectangle(0, 0, width, height));
+					}
+					bitmap.Dispose();
+					bitmap = smoothBitmap;
+				}).ConfigureAwait(false);
 			}
 
 			return bitmap;
@@ -1087,47 +1216,44 @@ namespace Breakbot404.Core
 
 		// Info Methods
 		public string GetInfoString(bool formatted = true)
-        {
-            List<string> infoLines = [
-                "" + Path.GetFileName(this.FilePath) + Environment.NewLine,
-                $"{(this.SampleRate / 1000.0f):F1} Hz, {this.Channels} ch., {this.BitDepth} bits",
-                $"Duration: {this.Duration:h\\:mm\\:ss\\.fff}",
-                $"({this.Length} f32 ≙ {(this.SizeInKb / 1024.0f):F2} MB)",
-                $"BPM-Tag: {this.Bpm:F3}"
-                ];
+		{
+			List<string> infoLines = [
+				"" + Path.GetFileName(this.FilePath) + Environment.NewLine,
+				$"{(this.SampleRate / 1000.0f):F1} Hz, {this.Channels} ch., {this.BitDepth} bits",
+				$"Duration: {this.Duration:h\\:mm\\:ss\\.fff}",
+				$"({this.Length} f32 ≙ {(this.SizeInKb / 1024.0f):F2} MB)",
+				$"BPM-Tag: {this.Bpm:F3}"
+				];
 
-            return formatted ? string.Join(Environment.NewLine, infoLines) : string.Join(" | ", infoLines);
-        }
+			return formatted ? string.Join(Environment.NewLine, infoLines) : string.Join(" | ", infoLines);
+		}
 
+		// Private Methods
+		private static IEnumerable<float> ReadAllSamplesStreaming(AudioFileReader reader)
+		{
+			const int BlockSeconds = 1;
+			int blockSize = reader.WaveFormat.SampleRate * reader.WaveFormat.Channels * BlockSeconds;
+			float[] buffer = new float[blockSize];
+			int read;
+			while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
+			{
+				for (int i = 0; i < read; i++)
+				{
+					yield return buffer[i];
+				}
+			}
+		}
 
-        // Private Methods
-        private static IEnumerable<float> ReadAllSamplesStreaming(AudioFileReader reader)
-        {
-            const int BlockSeconds = 1;
-            int blockSize = reader.WaveFormat.SampleRate * reader.WaveFormat.Channels * BlockSeconds;
-            float[] buffer = new float[blockSize];
-            int read;
-            while ((read = reader.Read(buffer, 0, buffer.Length)) > 0)
-            {
-                for (int i = 0; i < read; i++)
-                {
-                    yield return buffer[i];
-                }
-            }
-        }
+		private int CalculateSamplesPerPixelToFit(int width)
+		{
+			if (this.Data == null || this.Data.Length == 0 || width <= 0)
+			{
+				return 1;
+			}
+			int totalSamples = this.Data.Length / this.Channels;
+			int samplesPerPixel = (int) Math.Ceiling((double) totalSamples / width);
 
-        private int CalculateSamplesPerPixelToFit(int width)
-        {
-            if (this.Data == null || this.Data.Length == 0 || width <= 0)
-            {
-                return 1;
-            }
-            int totalSamples = this.Data.Length / this.Channels;
-            int samplesPerPixel = (int) Math.Ceiling((double) totalSamples / width);
-
-            return Math.Max(1, samplesPerPixel);
-        }
-
-
-    }
+			return Math.Max(1, samplesPerPixel);
+		}
+	}
 }

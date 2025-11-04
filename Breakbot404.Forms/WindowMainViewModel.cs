@@ -28,6 +28,7 @@ namespace Breakbot404.Forms
         // Rendering guard
         private int isRendering = 0;
 		private volatile bool isEditingTimestamp = false;
+        private bool isSelecting = false;
 
 		// Properties
         private DateTime LastGarbageCollected = DateTime.MinValue;
@@ -45,9 +46,12 @@ namespace Breakbot404.Forms
         private TextBox? TextBox_recordingTime = null;
         private Button? Button_waveColor = null;
         private Button? Button_backColor = null;
+        private NumericUpDown? NumericUpDown_truncateStart = null;
+		private NumericUpDown? NumericUpDown_truncateEnd = null;
 
 
 		// Fields
+		public string SelectionMode { get; set; } = "Look";
 		public int FrameRate { get; private set; } = 60;
         public int SamplesPerPixel { get; private set; } = 128;
         public bool DrawEachChannel { get; set; } = false;
@@ -165,16 +169,132 @@ namespace Breakbot404.Forms
                 {
                     this.Button_pause.ForeColor = this.SelectedTrack?.Paused == true ? Color.Black : Color.Gray;
                 }
+
+                if (this.NumericUpDown_truncateStart != null)
+                {
+                    this.NumericUpDown_truncateStart.Value = 0;
+                    this.NumericUpDown_truncateStart.Maximum = this.SelectedTrack != null ? (decimal) this.SelectedTrack.Duration.TotalSeconds : 0;
+                }
+                if (this.NumericUpDown_truncateEnd != null)
+                {
+                    this.NumericUpDown_truncateEnd.Value = 0;
+                    this.NumericUpDown_truncateEnd.Maximum = this.SelectedTrack != null ? (decimal) this.SelectedTrack.Duration.TotalSeconds : 0;
+                }
             };
 
             if (pictureBox_waveform != null)
             {
-                pictureBox_waveform.MouseWheel += async (s, e) =>
+                pictureBox_waveform.MouseMove += (s, e) =>
+                {
+                    if (this.isSelecting && this.SelectedTrack != null && (this.SelectionMode.Equals("Select", StringComparison.OrdinalIgnoreCase) || this.SelectionMode.Equals("Erase", StringComparison.OrdinalIgnoreCase)))
+					{
+                        this.SelectedTrack.SelectionEnd = (long) Math.Floor(this.GetTimeUnderCursor() * this.SelectedTrack.SampleRate * this.SelectedTrack.Channels);
+					}
+
+					switch (this.SelectionMode)
+					{
+						case "Look":
+							pictureBox_waveform.Cursor = Cursors.Default;
+							break;
+						case "Select":
+							pictureBox_waveform.Cursor = Cursors.IBeam;
+							break;
+						case "Move":
+							pictureBox_waveform.Cursor = Cursors.Hand;
+							break;
+						case "Erase":
+							pictureBox_waveform.Cursor = Cursors.Cross;
+							break;
+						default:
+							pictureBox_waveform.Cursor = Cursors.Default;
+							break;
+					}
+				};
+
+                pictureBox_waveform.MouseLeave += (s, e) =>
+                {
+                    pictureBox_waveform.Cursor = Cursors.Default;
+                };
+
+				pictureBox_waveform.MouseDown += (s, e) =>
+                {
+                    // Abort if right down
+                    if (Control.MouseButtons.HasFlag(MouseButtons.Right))
+                    {
+                        this.isSelecting = false;
+                        if (this.SelectedTrack != null)
+                        {
+                            this.SelectedTrack.SelectionStart = -1;
+                            this.SelectedTrack.SelectionEnd = -1;
+						}
+
+						return;
+					}
+
+					if (this.SelectedTrack == null)
+                    {
+                        return;
+					}
+
+                    this.isSelecting = true;
+
+                    if (this.SelectionMode.Equals("Select", StringComparison.OrdinalIgnoreCase))
+                    {
+						double start = this.GetTimeUnderCursor();
+						this.SelectedTrack.SelectionEnd = -1;
+						this.SelectedTrack.SelectionStart = (long) Math.Floor(start * this.SelectedTrack.SampleRate * this.SelectedTrack.Channels);
+
+						if (this.NumericUpDown_truncateStart != null)
+                        {
+							this.NumericUpDown_truncateStart.Value = Math.Clamp((decimal) start, this.NumericUpDown_truncateStart.Minimum, this.NumericUpDown_truncateStart.Maximum);
+                        }
+                    }
+                    else if (this.SelectionMode.Equals("Erase", StringComparison.OrdinalIgnoreCase))
+                    {
+						double start = this.GetTimeUnderCursor();
+						this.SelectedTrack.SelectionEnd = -1;
+						this.SelectedTrack.SelectionStart = (long) Math.Floor(start * this.SelectedTrack.SampleRate * this.SelectedTrack.Channels);
+					}
+				};
+
+                pictureBox_waveform.MouseUp += async (s, e) =>
+                {
+                    if (this.SelectedTrack == null)
+                    {
+                        return;
+                    }
+
+					if (this.SelectionMode.Equals("Select", StringComparison.OrdinalIgnoreCase))
+                    {
+						double end = this.GetTimeUnderCursor();
+						this.SelectedTrack.SelectionEnd = (long) Math.Floor(end * this.SelectedTrack.SampleRate * this.SelectedTrack.Channels);
+						if (Math.Abs(this.SelectedTrack.SelectionStart - this.SelectedTrack.SelectionEnd) < 5)
+						{
+							this.SelectedTrack.SelectionStart = -1;
+							this.SelectedTrack.SelectionEnd = -1;
+						}
+
+						if (this.NumericUpDown_truncateEnd != null)
+                        {
+							this.NumericUpDown_truncateEnd.Value = Math.Clamp((decimal) end, this.NumericUpDown_truncateEnd.Minimum, this.NumericUpDown_truncateEnd.Maximum);
+						}
+                    }
+					else if (this.SelectionMode.Equals("Erase", StringComparison.OrdinalIgnoreCase))
+					{
+                        await this.SelectedTrack.EraseSelectionAsync();
+						this.SelectedTrack.SelectionStart = -1;
+						this.SelectedTrack.SelectionEnd = -1;
+					}
+
+					this.isSelecting = false;
+				};
+
+				pictureBox_waveform.MouseWheel += async (s, e) =>
                 {
                     // If CTRL down, zoom (samplesPerPixel)
                     if (Control.ModifierKeys.HasFlag(Keys.Control))
                     {
-                        int delta = e.Delta > 0 ? -Math.Max(this.SamplesPerPixel / 2, 1) : Math.Max(this.SamplesPerPixel / 2, 1);
+                        int delta = e.Delta > 0 ? -Math.Max((int) (this.SamplesPerPixel / 10), 1) : Math.Max((int) (this.SamplesPerPixel / 10), 1);
                         int newSamplesPerPixel = Math.Clamp(this.SamplesPerPixel + delta, 1, (int) (numeric_samplesPerPixel?.Maximum ?? 8192));
                         this.SamplesPerPixel = newSamplesPerPixel;
                         if (numeric_samplesPerPixel != null)
@@ -183,24 +303,26 @@ namespace Breakbot404.Forms
                         }
 
                         this.AdjustOffsetHScrollBarValues();
-						return;
                     }
-
-                    // Otherwise, scroll horizontally (proportional to samplesPerPixel (change by1/4 of visible samples))
-                    if (this.HScrollBar_offset != null && this.SelectedTrack != null)
-					{
-                        if (this.SelectedTrack.Playing == false)
-                        {
-							int visibleSamples = pictureBox_waveform.Width * this.SamplesPerPixel;
-							int deltaPixels = (e.Delta > 0 ? -1 : 1) * (visibleSamples / (4 * this.SamplesPerPixel));
-							int newOffset = Math.Clamp(this.HScrollBar_offset.Value + deltaPixels, this.HScrollBar_offset.Minimum, this.HScrollBar_offset.Maximum);
-							this.HScrollBar_offset.Value = newOffset;
-                            if (this.SeekEnabled)
-                            {
-                                this.SelectedTrack.SetPosition(newOffset * this.SamplesPerPixel);
+                    else
+                    {
+						// Otherwise, scroll horizontally (proportional to samplesPerPixel (change by1/4 of visible samples))
+						if (this.HScrollBar_offset != null && this.SelectedTrack != null)
+						{
+							if (this.SelectedTrack.Playing == false)
+							{
+								int visibleSamples = pictureBox_waveform.Width * this.SamplesPerPixel;
+								int deltaPixels = (e.Delta > 0 ? -1 : 1) * (visibleSamples / (10 * this.SamplesPerPixel));
+								int newOffset = Math.Clamp(this.HScrollBar_offset.Value + deltaPixels, this.HScrollBar_offset.Minimum, this.HScrollBar_offset.Maximum);
+								this.HScrollBar_offset.Value = newOffset;
+								if (this.SeekEnabled)
+								{
+									this.SelectedTrack.SetPosition(newOffset * this.SamplesPerPixel);
+								}
 							}
 						}
-                    }
+					}
+                    
                 };
             }
 
@@ -305,7 +427,7 @@ namespace Breakbot404.Forms
 			}
 		}
 
-        internal void Bind_Elements_Playback(Button? button_playback = null, Button? button_pause = null, TextBox? textBox_timestamp = null, Button? button_recording = null, TextBox? textBox_recordingTime = null, VScrollBar? vScrollBar_volume = null, Label? label_volume = null)
+        internal void Bind_Elements_Playback(Button? button_playback = null, Button? button_pause = null, TextBox? textBox_timestamp = null, Button? button_recording = null, TextBox? textBox_recordingTime = null, VScrollBar? vScrollBar_volume = null, Label? label_volume = null, HScrollBar? hScrollBar_sampleRate = null, Label? label_sampleRate = null)
         {
             // Action onPlaybackStopped
             var onPlaybackStopped = new Action(() =>
@@ -547,9 +669,49 @@ namespace Breakbot404.Forms
 					}
 				};
             }
-        }
 
-        internal void Bind_Elements_IO(Button? button_import = null, Button? button_export = null, Button? button_remove = null, ComboBox? comboBox_format = null, ComboBox? comboBox_bits = null, Button? button_browse = null, Label? label_workingDir = null)
+			// Sample Rate scrollBar event
+            if (hScrollBar_sampleRate != null)
+            {
+                // Remove right-click menu
+                hScrollBar_sampleRate.ContextMenuStrip = new ContextMenuStrip();
+
+
+				hScrollBar_sampleRate.Scroll += async (s, ev) =>
+                {
+					float factor = 1.0f + ((hScrollBar_sampleRate.Value - ((hScrollBar_sampleRate.Minimum + hScrollBar_sampleRate.Maximum) / 2)) / (float) ((hScrollBar_sampleRate.Maximum - hScrollBar_sampleRate.Minimum) / 2)) * 0.5f;
+
+
+					if (label_sampleRate != null)
+                    {
+                        label_sampleRate.Text = $"Sample Rate: {(int)((this.SelectedTrack?.SampleRate ?? 0) * factor)} ({(100 * factor):F1}%)";
+					}
+
+					if (this.SelectedTrack != null)
+					{
+						await this.SelectedTrack.AdjustSampleRate(factor);
+					}
+				};
+
+				// If right clicked event, reset to 0 (center)
+                hScrollBar_sampleRate.MouseDown += async (s, ev) =>
+                {
+                    if (Control.MouseButtons.HasFlag(MouseButtons.Right))
+                    {
+						// Reset to center
+						int centerValue = (hScrollBar_sampleRate.Minimum + hScrollBar_sampleRate.Maximum) / 2;
+						hScrollBar_sampleRate.Value = centerValue;
+
+						if (this.SelectedTrack != null)
+                        {
+							await this.SelectedTrack.AdjustSampleRate(1);
+                        }
+                    }
+                };
+			}
+		}
+
+		internal void Bind_Elements_IO(Button? button_import = null, Button? button_reload = null, Button? button_export = null, Button? button_remove = null, ComboBox? comboBox_format = null, ComboBox? comboBox_bits = null, Button? button_browse = null, Label? label_workingDir = null)
         {
             // Import button
             if (button_import != null)
@@ -584,8 +746,32 @@ namespace Breakbot404.Forms
                 };
             }
 
-            // Export button
-            if (button_export != null)
+			// Reload button
+            if (button_reload != null)
+            {
+                button_reload.Click += async (s, ev) =>
+                {
+                    if (this.SelectedTrack == null)
+                    {
+                        MessageBox.Show(this.WindowMain, "No track selected to reload.", "Reload Track", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+					if (this.SelectedTrack.LoadAudioFile())
+                    {
+                        MessageBox.Show(this.WindowMain, "Failed to reload the selected track.", "Reload Track", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        return;
+                    }
+                    if (this.ListBox_audios != null)
+                    {
+                        this.ListBox_audios.SelectedIndex = -1;
+                        this.ListBox_audios.SelectedItem = SelectedTrack;
+                    }
+                    LogCollection.Log($"{SelectedTrack?.Name} reloaded.");
+                };
+			}
+
+			// Export button
+			if (button_export != null)
             {
                 button_export.Click += async (s, ev) =>
                 {
@@ -898,9 +1084,274 @@ namespace Breakbot404.Forms
 			}
 		}
 
+        internal void Bind_Elements_Cutting(Button? button_cut = null, Button? button_truncate = null, NumericUpDown? numeric_lufs = null, NumericUpDown? numeric_minDuration = null, NumericUpDown? numeric_maxDuration = null, NumericUpDown? numeric_silenceWindow = null, NumericUpDown? numeric_start = null, NumericUpDown? numeric_end = null, CheckBox? checkBox_keepOriginal = null, ProgressBar? progressBar = null)
+        {
+            if (checkBox_keepOriginal != null)
+            {
+                this.AudioC.KeepOriginal = checkBox_keepOriginal.Checked;
+                checkBox_keepOriginal.CheckedChanged += (s, e) =>
+                {
+                    this.AudioC.KeepOriginal = checkBox_keepOriginal.Checked;
+                };
+            }
 
-        // Private Methods
-        private async Task WaveformTimer_Tick(int garbageCollectionDelay = 0)
+            if (numeric_lufs != null)
+            {
+                this.AudioC.TargetLufs = (float) numeric_lufs.Value;
+                numeric_lufs.ValueChanged += (s, e) =>
+                {
+                    this.AudioC.TargetLufs = (float) Math.Clamp(numeric_lufs.Value, numeric_lufs.Minimum, numeric_lufs.Maximum);
+                };
+            }
+
+            if (numeric_minDuration != null)
+            {
+                this.AudioC.MinDurationMs = (int) numeric_minDuration.Value;
+                numeric_minDuration.ValueChanged += (s, e) =>
+                {
+                    this.AudioC.MinDurationMs = (int) Math.Clamp(numeric_minDuration.Value, numeric_minDuration.Minimum, numeric_minDuration.Maximum);
+                    if (numeric_maxDuration != null && numeric_minDuration.Value >= numeric_maxDuration.Value)
+                    {
+                        numeric_maxDuration.Value = Math.Clamp(numeric_minDuration.Value + 1, numeric_maxDuration.Minimum, numeric_maxDuration.Maximum);
+					}
+                };
+            }
+
+            if (numeric_maxDuration != null)
+            {
+                this.AudioC.MaxDurationMs = (int) numeric_maxDuration.Value;
+                numeric_maxDuration.ValueChanged += (s, e) =>
+                {
+                    this.AudioC.MaxDurationMs = (int) Math.Clamp(numeric_maxDuration.Value, numeric_maxDuration.Minimum, numeric_maxDuration.Maximum);
+                    if (numeric_minDuration != null && numeric_maxDuration.Value <= numeric_minDuration.Value)
+                    {
+                        numeric_minDuration.Value = Math.Clamp(numeric_maxDuration.Value - 1, numeric_minDuration.Minimum, numeric_minDuration.Maximum);
+                    }
+                };
+			}
+
+            if (numeric_silenceWindow != null)
+            {
+                this.AudioC.SilenceWindowMs = (int) numeric_silenceWindow.Value;
+                numeric_silenceWindow.ValueChanged += (s, e) =>
+                {
+                    this.AudioC.SilenceWindowMs = (int) Math.Clamp(numeric_silenceWindow.Value, numeric_silenceWindow.Minimum, numeric_silenceWindow.Maximum);
+                };
+            }
+
+            this.NumericUpDown_truncateStart = numeric_start;
+			if (numeric_start != null)
+            {
+                this.AudioC.TruncateStartSeconds = (double) numeric_start.Value;
+                numeric_start.ValueChanged += (s, e) =>
+                {
+                    this.AudioC.TruncateStartSeconds = (double) Math.Clamp(numeric_start.Value, numeric_start.Minimum, numeric_start.Maximum);
+                    if (numeric_end != null && numeric_start.Value >= numeric_end.Value)
+                    {
+                        numeric_end.Value = Math.Clamp(numeric_start.Value + 1, numeric_end.Minimum, numeric_end.Maximum);
+                    }
+                };
+            }
+
+            this.NumericUpDown_truncateEnd = numeric_end;
+			if (numeric_end != null)
+            {
+                this.AudioC.TruncateEndSeconds = (double) numeric_end.Value;
+                numeric_end.ValueChanged += (s, e) =>
+                {
+                    this.AudioC.TruncateEndSeconds = (double) Math.Clamp(numeric_end.Value, numeric_end.Minimum, numeric_end.Maximum);
+                    if (numeric_start != null && numeric_end.Value <= numeric_start.Value)
+                    {
+                        numeric_start.Value = Math.Clamp(numeric_end.Value - 1, numeric_start.Minimum, numeric_start.Maximum);
+                    }
+                };
+			}
+
+            if (button_cut != null)
+            {
+                button_cut.Click += async (s, e) =>
+                {
+                    if (this.SelectedTrack == null)
+                    {
+                        MessageBox.Show(this.WindowMain, "No track selected to cut.", "Cut Track", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    button_cut.Enabled = false;
+                    try
+                    {
+                        IProgress<double>? progress = null;
+                        if (progressBar != null)
+                        {
+                            progressBar.Minimum = 0;
+                            progressBar.Value = 0;
+                            progressBar.Maximum = 100;
+                            progress = new Progress<double>(value =>
+                            {
+                                int progressValue = (int) Math.Clamp(value * 100.0, 0.0, 100.0);
+                                progressBar.Value = progressValue;
+                            });
+                        }
+
+                        var cutResult = await this.AudioC.AutoCutAudioAsync(this.SelectedTrack.Id, add: true, progress: progress);
+                        if (cutResult.Any())
+                        {
+                            LogCollection.Log($"{this.SelectedTrack.Name} cut into segments based on silence detection.");
+                        }
+                        else
+                        {
+                            LogCollection.Log($"Failed to cut {this.SelectedTrack.Name}.");
+                        }
+
+                        if (progressBar != null)
+                        {
+                            progressBar.Invoke(() =>
+                            {
+                                progressBar.Value = 0;
+                            });
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show(this.WindowMain, $"An error occurred while cutting the track: {ex.Message}", "Cut Track", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                    finally
+                    {
+                        button_cut.Enabled = true;
+                    }
+				};
+			}
+
+            if (button_truncate != null)
+            {
+                button_truncate.Click += async (s, e) =>
+                {
+                    if (this.SelectedTrack == null)
+                    {
+                        MessageBox.Show(this.WindowMain, "No track selected to truncate.", "Truncate Track", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+                    button_truncate.Enabled = false;
+                    try
+                    {
+                        var truncateResult = await this.AudioC.TruncateAudioAsync(this.SelectedTrack.Id);
+                        if (truncateResult != null)
+                        {
+                            LogCollection.Log($"{this.SelectedTrack.Name} truncated based on specified start and end times.");
+                        }
+                        else
+                        {
+                            LogCollection.Log($"Failed to truncate {this.SelectedTrack.Name}.");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show(this.WindowMain, $"An error occurred while truncating the track: {ex.Message}", "Truncate Track", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                    finally
+                    {
+                        button_truncate.Enabled = true;
+                    }
+                };
+			}
+		}
+
+        internal void Bind_Elements_SelectionMode(Button button_selectionMode, Label? label_selectionMode = null, Button? button_copy = null)
+        {
+            Dictionary<string, string> modes = new()
+            {
+                { "Look", "🔎︎" },
+                { "Select", "⛶" },
+                { "Move", "✋" },
+                { "Erase", "⛏️" }
+			};
+
+            this.SelectionMode = modes.First(kvp => kvp.Value == button_selectionMode.Text).Key;
+            if (label_selectionMode != null)
+            {
+                label_selectionMode.Text = $"{this.SelectionMode}";
+                switch (this.SelectionMode)
+                {
+                    case "Look":
+                        label_selectionMode.ForeColor = Color.Blue;
+                        break;
+                    case "Select":
+                        label_selectionMode.ForeColor = Color.Green;
+                        break;
+                    case "Move":
+                        label_selectionMode.ForeColor = Color.Orange;
+                        break;
+                    case "Erase":
+                        label_selectionMode.ForeColor = Color.Red;
+                        break;
+                    default:
+                        label_selectionMode.ForeColor = Color.Black;
+                        break;
+				}
+			}
+
+			// Button cycle through modes
+			button_selectionMode.Click += (s, e) =>
+            {
+                var modeKeys = modes.Keys.ToList();
+                int currentIndex = modeKeys.IndexOf(this.SelectionMode);
+                int nextIndex = (currentIndex + 1) % modeKeys.Count;
+                this.SelectionMode = modeKeys[nextIndex];
+                
+                button_selectionMode.Text = modes[this.SelectionMode];
+                
+                if (label_selectionMode != null)
+                {
+                    label_selectionMode.Text = $"{this.SelectionMode}";
+					switch (this.SelectionMode)
+					{
+						case "Look":
+							label_selectionMode.ForeColor = Color.Blue;
+							break;
+						case "Select":
+							label_selectionMode.ForeColor = Color.Green;
+							break;
+						case "Move":
+							label_selectionMode.ForeColor = Color.Orange;
+							break;
+						case "Erase":
+							label_selectionMode.ForeColor = Color.Red;
+							break;
+						default:
+							label_selectionMode.ForeColor = Color.Black;
+							break;
+					}
+				}
+            };
+
+			// Copy button
+            if (button_copy != null)
+            {
+                button_copy.Click += async (s, e) =>
+                {
+                    if (this.SelectedTrack == null)
+                    {
+                        MessageBox.Show(this.WindowMain, "No track selected to copy.", "Copy Track", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        return;
+                    }
+
+                    var copiedTrack = await this.SelectedTrack.CloneFromSelectionAsync();
+                    if (copiedTrack != null)
+                    {
+                        this.AudioC.Audios.Add(copiedTrack);
+						LogCollection.Log($"{this.SelectedTrack.Name} copied to {copiedTrack.Name}.");
+                    }
+                    else
+                    {
+                        LogCollection.Log($"Failed to copy {this.SelectedTrack.Name}.");
+                    }
+                };
+			}
+		}
+
+
+		// Private Methods
+		private async Task WaveformTimer_Tick(int garbageCollectionDelay = 0)
         {
             // Prevent overlapping renders
             if (Interlocked.CompareExchange(ref this.isRendering, 1, 0) != 0)
@@ -1243,5 +1694,35 @@ namespace Breakbot404.Forms
         {
             return Color.FromArgb(color.A, 255 - color.R, 255 - color.G, 255 - color.B);
 		}
+
+        private double GetTimeUnderCursor()
+        {
+            if (this.PictureBox_waveform == null || this.SelectedTrack == null)
+            {
+                return 0.0;
+            }
+            
+            Point cursorPosition = this.PictureBox_waveform.PointToClient(Cursor.Position);
+            int cursorX = cursorPosition.X;
+            
+            // Clamp cursorX to PictureBox width
+            cursorX = Math.Max(0, Math.Min(this.PictureBox_waveform.Width - 1, cursorX));
+            
+            // Berechne den Frame-Index unter dem Cursor
+            long frameIndex = (long) cursorX * this.SamplesPerPixel;
+            
+            // Berücksichtige den HScrollBar-Offset
+            if (this.HScrollBar_offset != null)
+            {
+                frameIndex += (long) this.HScrollBar_offset.Value * this.SamplesPerPixel;
+            }
+            
+            // Konvertiere Frame-Index in Zeit (in Sekunden)
+            double timeInSeconds = frameIndex / (double) this.SelectedTrack.SampleRate;
+
+			return timeInSeconds;
+        }
+
+
 	}
 }

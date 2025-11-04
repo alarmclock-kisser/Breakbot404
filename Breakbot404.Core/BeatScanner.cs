@@ -39,10 +39,10 @@ namespace Breakbot404.Core
             float timing = 1.0f;
             if (autoGetTiming)
             {
-                timing = await ScanTimingAsync(obj, windowSize, lookingRange);
+                timing = await this.ScanTimingAsync(obj, windowSize, lookingRange);
             }
 
-            double bpm = await EstimateBpmAsync(monoData, obj.SampleRate, minBpm, maxBpm);
+            double bpm = await this.EstimateBpmAsync(monoData, obj.SampleRate, minBpm, maxBpm);
 
             sw.Stop();
             obj["BeatScan"] = (float) sw.Elapsed.TotalMilliseconds;
@@ -66,7 +66,7 @@ namespace Breakbot404.Core
 
             var monoData = await obj.GetCurrentWindowAsync(windowSize, lookingRange, true, false);
 
-            float timing = await EstimateTimingAsync(monoData, obj.SampleRate);
+            float timing = await this.EstimateTimingAsync(monoData, obj.SampleRate);
 
             obj.Timing = timing;
 
@@ -419,8 +419,8 @@ namespace Breakbot404.Core
                     double contrast = maxPhase - meanPhase;
 
                     // Template-basiertes Matching (mit maximaler zirkularer Korrelation)
-                    double[] tpl = BuildMeterTemplate(K);
-                    double tplCorr = MaxCircularCorrelation(phaseAvg, tpl);
+                    double[] tpl = this.BuildMeterTemplate(K);
+                    double tplCorr = this.MaxCircularCorrelation(phaseAvg, tpl);
 
                     // Bars-Abdeckung (mehr Bars => vertrauenswürdiger)
                     double nBars = (double) nBeats / K;
@@ -549,13 +549,13 @@ namespace Breakbot404.Core
             // z-Normalisierung
             double[] xn = (double[]) x.Clone();
             double[] yn = (double[]) y.Clone();
-            NormalizeZeroMeanUnitVar(xn);
-            NormalizeZeroMeanUnitVar(yn);
+            this.NormalizeZeroMeanUnitVar(xn);
+            this.NormalizeZeroMeanUnitVar(yn);
 
             double best = double.NegativeInfinity;
             for (int s = 0; s < K; s++)
             {
-                double corr = PearsonCorr(xn, Rotate(yn, s));
+                double corr = this.PearsonCorr(xn, this.Rotate(yn, s));
                 if (corr > best)
                 {
                     best = corr;
